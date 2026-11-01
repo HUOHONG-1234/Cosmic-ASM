@@ -183,7 +183,10 @@ class _Parser:
         self.extern_functions[name] = {
             "parameters": parameters,
             "return_type": return_type,
-            "symbol": match.group(4) or name,
+            # 未写 `as` 时用源文件里的原始大小写作为导出名。
+            # Windows 的 GetProcAddress 区分大小写，降成小写会找不到
+            # PlaySoundA / GetTickCount 这类驼峰导出。
+            "symbol": match.group(4) or match.group(1),
             "calling_convention": "stdcall" if match.group(5) else "cdecl",
         }
 

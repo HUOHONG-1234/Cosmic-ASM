@@ -57,6 +57,33 @@ _DLL_FORMATS: dict[str, str] = {
     "HWND": "%llu",
 }
 
+_DLL_TEXT_PARAMS = {"STR", "LPCSTR"}
+_DLL_POINTER_PARAMS = {"PTR", "HWND", "VOID"}
+
+
+def _c_cast_dll_argument(rendered: str, type_name: str | None) -> str:
+    """按 #extern 声明的类型把参数转成 C 侧类型。
+
+    _c_expression 会把数字一律生成为 (double)(...)，直接传给
+    void* / unsigned long 形参会导致 GCC 报 incompatible type。
+    """
+    if not type_name:
+        return rendered
+    ctype = _DLL_C_TYPES.get(type_name)
+    if ctype is None:
+        return rendered
+    is_text_literal = rendered.lstrip().startswith('"')
+    if type_name in _DLL_TEXT_PARAMS:
+        if is_text_literal:
+            return f"(({ctype})({rendered}))"
+        # 数值 0 当作空指针，其余经由整数转换避免 double -> pointer
+        return f"(({ctype})(unsigned long long)({rendered}))"
+    if type_name in _DLL_POINTER_PARAMS:
+        return f"(({ctype})(unsigned long long)({rendered}))"
+    if type_name in {"FLOAT", "DOUBLE"}:
+        return f"(({ctype})({rendered}))"
+    return f"(({ctype})({rendered}))"
+
 _BUILTIN_FUNCTION_NAMES = {
     "abs", "sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
     "rag_range", "sinh", "cosh", "tanh", "exp", "log", "log10", "log2",
@@ -5328,8 +5355,9 @@ class CGenerator:
         if declaration is None:
             raise ParseError(line, f"DLL function '{function}' has no #extern declaration")
         _name, parameters, return_type, export_symbol, _convention = declaration
-        converted = [
-            _c_expression(
+        converted = []
+        for index, argument in enumerate(arguments):
+            rendered = _c_expression(
                 str(argument),
                 context,
                 line,
@@ -5338,8 +5366,8 @@ class CGenerator:
                 array_indices=self.array_indices,
                 array_variable_indices=self.array_variable_indices,
             )
-            for argument in arguments
-        ]
+            declared = parameters[index] if index < len(parameters) else None
+            converted.append(_c_cast_dll_argument(rendered, declared))
         if return_type == "VOID":
             call = (
                 f"((cosmic_fn_{function})symbol)({', '.join(converted)})"

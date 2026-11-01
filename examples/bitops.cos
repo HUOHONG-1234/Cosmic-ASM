@@ -1,0 +1,69 @@
+#% v5 bitwise operators, hex/unhex and byte arrays.
+#% Every value below is cross-checked in the test suite against Python.
+#%
+#% #%math is a program-wide directive, so this whole file evaluates in uint32
+#% wraparound mode. That is what makes ~5 come out as 4294967290 rather than -6.
+#%math = uint32
+call = (math)
+
+#%***********************
+#% 1. Bitwise operators (they require an integer math mode).
+#%***********************
+math_run 12 & 10 = ?
+if up = (ok) goto (push ({and_result} = {(in = up)}))
+math_run 12 | 10 = ?
+if up = (ok) goto (push ({or_result} = {(in = up)}))
+math_run 12 ^ 10 = ?
+if up = (ok) goto (push ({xor_result} = {(in = up)}))
+math_run 1 << 10 = ?
+if up = (ok) goto (push ({shifted} = {(in = up)}))
+math_run ~5 = ?
+if up = (ok) goto (push ({inverted} = {(in = up)}))
+print (<{and_result}>)
+print (<{or_result}>)
+print (<{xor_result}>)
+print (<{shifted}>)
+print (<{inverted}>)
+
+#%***********************
+#% 2. A 32-bit rotation, the usual bit-twiddling idiom.
+#%***********************
+function rotl32(v, n) = (v << n) | (v >> (32 - n))
+math_run rotl32(305419896, 8) = ?
+if up = (ok) goto (push ({rotated} = {(in = up)}))
+print (<{rotated}>)
+
+#%***********************
+#% 3. uint32 wraps instead of overflowing, and >> is always logical.
+#%***********************
+math_run 4294967295 + 2 = ?
+if up = (ok) goto (push ({wrapped} = {(in = up)}))
+math_run 0 - 1 = ?
+if up = (ok) goto (push ({underflow} = {(in = up)}))
+math_run 4294967295 >> 1 = ?
+if up = (ok) goto (push ({logical_shift} = {(in = up)}))
+print (<{wrapped}>)
+print (<{underflow}>)
+print (<{logical_shift}>)
+
+#%***********************
+#% 4. hex and unhex.
+#%***********************
+math_run hex(255, 2) = ?
+if up = (ok) goto (push ({padded} = {(in = up)}))
+math_run hex(48879) = ?
+if up = (ok) goto (push ({beef} = {(in = up)}))
+print (<{padded}>)
+print (<{beef}>)
+
+#%***********************
+#% 5. Byte arrays: bytes_get/bytes_set/bytes_len, one byte per element.
+#%***********************
+bytes tag = [67, 79, 83, 77, 73, 67]
+bytes_set(tag, 0, 99)
+math_run bytes_len(tag) = ?
+if up = (ok) goto (push ({tag_length} = {(in = up)}))
+math_run bytes_get(tag, 0) = ?
+if up = (ok) goto (push ({first_byte} = {(in = up)}))
+print (<{tag_length}>)
+print (<{first_byte}>)

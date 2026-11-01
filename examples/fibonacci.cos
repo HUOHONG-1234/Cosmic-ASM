@@ -1,0 +1,21 @@
+#% 斐波那契数列
+#math
+call = (math)
+math_run 0 = ? -int64
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run 1 = ? -int64
+if up = (ok) goto (push ({b} = {(in = up)}))
+math_run 0 = ? -int64
+if up = (ok) goto (push ({n} = {(in = up)}))
+while ({n} < 50)
+{
+    math_run {a} + {b} = ? -int64
+    if up = (ok) goto (push ({c} = {(in = up)}))
+    math_run {b} = ? -int64
+    if up = (ok) goto (push ({a} = {(in = up)}))
+    math_run {c} = ? -int64
+    if up = (ok) goto (push ({b} = {(in = up)}))
+    math_run {n} + 1 = ? -int64
+    if up = (ok) goto (push ({n} = {(in = up)}))
+}
+print (<{a}>)

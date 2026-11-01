@@ -1,0 +1,13 @@
+#% 欧拉恒等式 e^(i*pi) + 1 = 0
+#%math = complex
+#math
+call = (math)
+math_run exp(complex(0, 1) * pi) = ? -complex
+if up = (ok) goto (push ({euler} = {(in = up)}))
+print (<{euler}>)
+math_run complex(3, 4) / complex(1, -2) = ? -complex
+if up = (ok) goto (push ({q} = {(in = up)}))
+print (<{q}>)
+math_run abs(complex(3, 4)) = ? -float64
+if up = (ok) goto (push ({mod} = {(in = up)}))
+print (<{mod}>)

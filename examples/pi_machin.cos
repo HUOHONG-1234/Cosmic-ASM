@@ -1,0 +1,8 @@
+#%math = float64
+#math
+call = (math)
+
+#% Machin公式：pi = 16*atan(1/5) - 4*atan(1/239)
+math_run 16 * atan(1 / 5) - 4 * atan(1 / 239) = ? -float64
+if up = (ok) goto (push ({pi_approx} = {(in = up)}))
+print (<{pi_approx}>)

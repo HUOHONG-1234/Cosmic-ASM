@@ -1,0 +1,65 @@
+#% 米勒-拉宾素性检验（单基 2）
+#% n-1 = 2^s * d, 算 2^d mod n; 结果 1 或 n-1 判为可能素数
+#% 注: push ({a}={b}) 目前不复制值, 一律用 math_run 绕开
+#math
+call = (math)
+push ({n} = {"1000003"})
+
+math_run {n} - 1 = ? -int64
+if up = (ok) goto (push ({nm1} = {(in = up)}))
+math_run {nm1} + 0 = ? -int64
+if up = (ok) goto (push ({d} = {(in = up)}))
+math_run 0 + 0 = ? -int64
+if up = (ok) goto (push ({s} = {(in = up)}))
+
+while ({d} % 2 == 0)
+{
+    math_run {d} // 2 = ? -int64
+    if up = (ok) goto (push ({d2} = {(in = up)}))
+    math_run {d2} + 0 = ? -int64
+    if up = (ok) goto (push ({d} = {(in = up)}))
+    math_run {s} + 1 = ? -int64
+    if up = (ok) goto (push ({s2} = {(in = up)}))
+    math_run {s2} + 0 = ? -int64
+    if up = (ok) goto (push ({s} = {(in = up)}))
+}
+
+math_run 2 + 0 = ? -int64
+if up = (ok) goto (push ({base} = {(in = up)}))
+math_run 1 + 0 = ? -int64
+if up = (ok) goto (push ({res} = {(in = up)}))
+math_run {d} + 0 = ? -int64
+if up = (ok) goto (push ({e} = {(in = up)}))
+
+while ({e} > 0)
+{
+    if ({e} % 2 == 1)
+    {
+        math_run {res} * {base} % {n} = ? -int64
+        if up = (ok) goto (push ({r2} = {(in = up)}))
+        math_run {r2} + 0 = ? -int64
+        if up = (ok) goto (push ({res} = {(in = up)}))
+    }
+    math_run {base} * {base} % {n} = ? -int64
+    if up = (ok) goto (push ({b2} = {(in = up)}))
+    math_run {b2} + 0 = ? -int64
+    if up = (ok) goto (push ({base} = {(in = up)}))
+    math_run {e} // 2 = ? -int64
+    if up = (ok) goto (push ({e2} = {(in = up)}))
+    math_run {e2} + 0 = ? -int64
+    if up = (ok) goto (push ({e} = {(in = up)}))
+}
+
+print (<{s}>)
+print (<{d}>)
+print (<{res}>)
+push ({verdict} = {"composite"})
+if ({res} == 1)
+{
+    push ({verdict} = {"probable_prime"})
+}
+if ({res} == {nm1})
+{
+    push ({verdict} = {"probable_prime"})
+}
+print (<{verdict}>)

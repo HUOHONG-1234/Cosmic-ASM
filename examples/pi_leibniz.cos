@@ -1,0 +1,26 @@
+#% 用莱布尼茨级数算圆周率: 1 - 1/3 + 1/5 - 1/7 ... = pi/4
+#math
+call = (math)
+
+math_run 0 = ? -float64
+if up = (ok) goto (push ({sum} = {(in = up}))
+math_run 1 = ? -float64
+if up = (ok) goto (push ({sign} = {(in = up}))
+math_run 1 = ? -float64
+if up = (ok) goto (push ({k} = {(in = up}))
+math_run 0 = ? -float64
+if up = (ok) goto (push ({n} = {(in = up}))
+while ({n} < 200000)
+{
+    math_run {sum} + {sign} / {k} = ? -float64
+    if up = (ok) goto (push ({sum} = {(in = up}))
+    math_run {sign} * -1 = ? -float64
+    if up = (ok) goto (push ({sign} = {(in = up}))
+    math_run {k} + 2 = ? -float64
+    if up = (ok) goto (push ({k} = {(in = up}))
+    math_run {n} + 1 = ? -float64
+    if up = (ok) goto (push ({n} = {(in = up}))
+}
+math_run {sum} * 4 = ? -float64
+if up = (ok) goto (push ({pi_value} = {(in = up}))
+print (<{pi_value}>)

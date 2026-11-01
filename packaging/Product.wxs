@@ -1,0 +1,30 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="Cosmic ASM"
+    Manufacturer="Cosmic ASM"
+    Version="0.1.0"
+    UpgradeCode="4F923FD7-6BA1-4BCE-9B33-DC8B8AFA65DA"
+    Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Cosmic ASM is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Feature Id="Main" Title="Cosmic ASM" Level="1">
+      <ComponentGroupRef Id="ApplicationFiles" />
+    </Feature>
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Cosmic ASM" />
+    </StandardDirectory>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="ApplicationFiles" Directory="INSTALLFOLDER">
+      <Component Id="CosmicInterpreter" Guid="*">
+        <File Source="$(var.BinaryDirectory)\CosmicInterpreter.exe" />
+      </Component>
+      <Component Id="CosmicCompiler" Guid="*">
+        <File Source="$(var.BinaryDirectory)\CosmicCompiler.exe" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

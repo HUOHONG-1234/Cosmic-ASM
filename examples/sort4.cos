@@ -1,0 +1,49 @@
+#math
+call = (math)
+function lo(x, y) = choose(x > y, y, x)
+function hi(x, y) = choose(x > y, x, y)
+
+push ({a} = {"4"})
+push ({b} = {"1"})
+push ({c} = {"3"})
+push ({d} = {"2"})
+
+math_run lo({a}, {b}) = ? -int64
+if up = (ok) goto (push ({t1} = {(in = up)}))
+math_run hi({a}, {b}) = ? -int64
+if up = (ok) goto (push ({t2} = {(in = up)}))
+push ({a} = {t1})
+push ({b} = {t2})
+
+math_run lo({c}, {d}) = ? -int64
+if up = (ok) goto (push ({t1} = {(in = up)}))
+math_run hi({c}, {d}) = ? -int64
+if up = (ok) goto (push ({t2} = {(in = up)}))
+push ({c} = {t1})
+push ({d} = {t2})
+
+math_run lo({a}, {c}) = ? -int64
+if up = (ok) goto (push ({t1} = {(in = up)}))
+math_run hi({a}, {c}) = ? -int64
+if up = (ok) goto (push ({t2} = {(in = up)}))
+push ({a} = {t1})
+push ({c} = {t2})
+
+math_run lo({b}, {d}) = ? -int64
+if up = (ok) goto (push ({t1} = {(in = up)}))
+math_run hi({b}, {d}) = ? -int64
+if up = (ok) goto (push ({t2} = {(in = up)}))
+push ({b} = {t1})
+push ({d} = {t2})
+
+math_run lo({b}, {c}) = ? -int64
+if up = (ok) goto (push ({t1} = {(in = up)}))
+math_run hi({b}, {c}) = ? -int64
+if up = (ok) goto (push ({t2} = {(in = up)}))
+push ({b} = {t1})
+push ({c} = {t2})
+
+print (<{a}>)
+print (<{b}>)
+print (<{c}>)
+print (<{d}>)

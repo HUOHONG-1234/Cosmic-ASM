@@ -1,0 +1,32 @@
+#% v4 atom: two blocks chained by proton, started by nuclear_reactor
+#atom
+call = (atom)
+
+push ({stage} = {"0"})
+
+father = up
+start(normal) = {stage_one}
+{
+    lock {stage_one}
+    {
+        math_run 10 + 1 = ? -int64
+        if up = (ok) goto (push ({stage} = {(in = up)}))
+    }
+}
+
+father = up
+start(normal) = {stage_two}
+{
+    lock {stage_two}
+    {
+        math_run {stage} + 11 = ? -int64
+        if up = (ok) goto (push ({stage} = {(in = up)}))
+    }
+}
+
+proton {pipeline} = {stage_one} -> {stage_two}
+nuclear_reactor {main} = {pipeline}
+
+#% dog waits for stage_two to settle before the caller reads the shared value.
+dog(stage_two) = (pass : ok) (error : error)
+print (<{stage}>)

@@ -1,0 +1,1108 @@
+#% v5 SHA-256 of a short ASCII message, implemented in COS itself.
+#% Requires v5 bitwise operators, -uint32 wraparound and bytes arrays.
+#% This is a correctness demo, not a constant-time crypto implementation.
+#%math = uint32
+call = (math)
+#% Round constants K[0..63]
+array KS = [0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2]
+array HS = [1779033703, 3144134277, 1013904242, 2773480762, 1359893119, 2600822924, 528734635, 1541459225]
+#% Padded 512-bit message block
+bytes BLK = [97, 98, 99, 128, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 24]
+math_run (bytes_get(BLK, 0) << 24) + (bytes_get(BLK, 1) << 16) + (bytes_get(BLK, 2) << 8) + (bytes_get(BLK, 3) << 0) = ?
+if up = (ok) goto (push ({w0} = {(in = up)}))
+math_run (bytes_get(BLK, 4) << 24) + (bytes_get(BLK, 5) << 16) + (bytes_get(BLK, 6) << 8) + (bytes_get(BLK, 7) << 0) = ?
+if up = (ok) goto (push ({w1} = {(in = up)}))
+math_run (bytes_get(BLK, 8) << 24) + (bytes_get(BLK, 9) << 16) + (bytes_get(BLK, 10) << 8) + (bytes_get(BLK, 11) << 0) = ?
+if up = (ok) goto (push ({w2} = {(in = up)}))
+math_run (bytes_get(BLK, 12) << 24) + (bytes_get(BLK, 13) << 16) + (bytes_get(BLK, 14) << 8) + (bytes_get(BLK, 15) << 0) = ?
+if up = (ok) goto (push ({w3} = {(in = up)}))
+math_run (bytes_get(BLK, 16) << 24) + (bytes_get(BLK, 17) << 16) + (bytes_get(BLK, 18) << 8) + (bytes_get(BLK, 19) << 0) = ?
+if up = (ok) goto (push ({w4} = {(in = up)}))
+math_run (bytes_get(BLK, 20) << 24) + (bytes_get(BLK, 21) << 16) + (bytes_get(BLK, 22) << 8) + (bytes_get(BLK, 23) << 0) = ?
+if up = (ok) goto (push ({w5} = {(in = up)}))
+math_run (bytes_get(BLK, 24) << 24) + (bytes_get(BLK, 25) << 16) + (bytes_get(BLK, 26) << 8) + (bytes_get(BLK, 27) << 0) = ?
+if up = (ok) goto (push ({w6} = {(in = up)}))
+math_run (bytes_get(BLK, 28) << 24) + (bytes_get(BLK, 29) << 16) + (bytes_get(BLK, 30) << 8) + (bytes_get(BLK, 31) << 0) = ?
+if up = (ok) goto (push ({w7} = {(in = up)}))
+math_run (bytes_get(BLK, 32) << 24) + (bytes_get(BLK, 33) << 16) + (bytes_get(BLK, 34) << 8) + (bytes_get(BLK, 35) << 0) = ?
+if up = (ok) goto (push ({w8} = {(in = up)}))
+math_run (bytes_get(BLK, 36) << 24) + (bytes_get(BLK, 37) << 16) + (bytes_get(BLK, 38) << 8) + (bytes_get(BLK, 39) << 0) = ?
+if up = (ok) goto (push ({w9} = {(in = up)}))
+math_run (bytes_get(BLK, 40) << 24) + (bytes_get(BLK, 41) << 16) + (bytes_get(BLK, 42) << 8) + (bytes_get(BLK, 43) << 0) = ?
+if up = (ok) goto (push ({w10} = {(in = up)}))
+math_run (bytes_get(BLK, 44) << 24) + (bytes_get(BLK, 45) << 16) + (bytes_get(BLK, 46) << 8) + (bytes_get(BLK, 47) << 0) = ?
+if up = (ok) goto (push ({w11} = {(in = up)}))
+math_run (bytes_get(BLK, 48) << 24) + (bytes_get(BLK, 49) << 16) + (bytes_get(BLK, 50) << 8) + (bytes_get(BLK, 51) << 0) = ?
+if up = (ok) goto (push ({w12} = {(in = up)}))
+math_run (bytes_get(BLK, 52) << 24) + (bytes_get(BLK, 53) << 16) + (bytes_get(BLK, 54) << 8) + (bytes_get(BLK, 55) << 0) = ?
+if up = (ok) goto (push ({w13} = {(in = up)}))
+math_run (bytes_get(BLK, 56) << 24) + (bytes_get(BLK, 57) << 16) + (bytes_get(BLK, 58) << 8) + (bytes_get(BLK, 59) << 0) = ?
+if up = (ok) goto (push ({w14} = {(in = up)}))
+math_run (bytes_get(BLK, 60) << 24) + (bytes_get(BLK, 61) << 16) + (bytes_get(BLK, 62) << 8) + (bytes_get(BLK, 63) << 0) = ?
+if up = (ok) goto (push ({w15} = {(in = up)}))
+math_run {w0} + ((({w1} >> 7) | ({w1} << 25)) ^ (({w1} >> 18) | ({w1} << 14)) ^ ({w1} >> 3)) + {w9} + ((({w14} >> 17) | ({w14} << 15)) ^ (({w14} >> 19) | ({w14} << 13)) ^ ({w14} >> 10)) = ?
+if up = (ok) goto (push ({w16} = {(in = up)}))
+math_run {w1} + ((({w2} >> 7) | ({w2} << 25)) ^ (({w2} >> 18) | ({w2} << 14)) ^ ({w2} >> 3)) + {w10} + ((({w15} >> 17) | ({w15} << 15)) ^ (({w15} >> 19) | ({w15} << 13)) ^ ({w15} >> 10)) = ?
+if up = (ok) goto (push ({w17} = {(in = up)}))
+math_run {w2} + ((({w3} >> 7) | ({w3} << 25)) ^ (({w3} >> 18) | ({w3} << 14)) ^ ({w3} >> 3)) + {w11} + ((({w16} >> 17) | ({w16} << 15)) ^ (({w16} >> 19) | ({w16} << 13)) ^ ({w16} >> 10)) = ?
+if up = (ok) goto (push ({w18} = {(in = up)}))
+math_run {w3} + ((({w4} >> 7) | ({w4} << 25)) ^ (({w4} >> 18) | ({w4} << 14)) ^ ({w4} >> 3)) + {w12} + ((({w17} >> 17) | ({w17} << 15)) ^ (({w17} >> 19) | ({w17} << 13)) ^ ({w17} >> 10)) = ?
+if up = (ok) goto (push ({w19} = {(in = up)}))
+math_run {w4} + ((({w5} >> 7) | ({w5} << 25)) ^ (({w5} >> 18) | ({w5} << 14)) ^ ({w5} >> 3)) + {w13} + ((({w18} >> 17) | ({w18} << 15)) ^ (({w18} >> 19) | ({w18} << 13)) ^ ({w18} >> 10)) = ?
+if up = (ok) goto (push ({w20} = {(in = up)}))
+math_run {w5} + ((({w6} >> 7) | ({w6} << 25)) ^ (({w6} >> 18) | ({w6} << 14)) ^ ({w6} >> 3)) + {w14} + ((({w19} >> 17) | ({w19} << 15)) ^ (({w19} >> 19) | ({w19} << 13)) ^ ({w19} >> 10)) = ?
+if up = (ok) goto (push ({w21} = {(in = up)}))
+math_run {w6} + ((({w7} >> 7) | ({w7} << 25)) ^ (({w7} >> 18) | ({w7} << 14)) ^ ({w7} >> 3)) + {w15} + ((({w20} >> 17) | ({w20} << 15)) ^ (({w20} >> 19) | ({w20} << 13)) ^ ({w20} >> 10)) = ?
+if up = (ok) goto (push ({w22} = {(in = up)}))
+math_run {w7} + ((({w8} >> 7) | ({w8} << 25)) ^ (({w8} >> 18) | ({w8} << 14)) ^ ({w8} >> 3)) + {w16} + ((({w21} >> 17) | ({w21} << 15)) ^ (({w21} >> 19) | ({w21} << 13)) ^ ({w21} >> 10)) = ?
+if up = (ok) goto (push ({w23} = {(in = up)}))
+math_run {w8} + ((({w9} >> 7) | ({w9} << 25)) ^ (({w9} >> 18) | ({w9} << 14)) ^ ({w9} >> 3)) + {w17} + ((({w22} >> 17) | ({w22} << 15)) ^ (({w22} >> 19) | ({w22} << 13)) ^ ({w22} >> 10)) = ?
+if up = (ok) goto (push ({w24} = {(in = up)}))
+math_run {w9} + ((({w10} >> 7) | ({w10} << 25)) ^ (({w10} >> 18) | ({w10} << 14)) ^ ({w10} >> 3)) + {w18} + ((({w23} >> 17) | ({w23} << 15)) ^ (({w23} >> 19) | ({w23} << 13)) ^ ({w23} >> 10)) = ?
+if up = (ok) goto (push ({w25} = {(in = up)}))
+math_run {w10} + ((({w11} >> 7) | ({w11} << 25)) ^ (({w11} >> 18) | ({w11} << 14)) ^ ({w11} >> 3)) + {w19} + ((({w24} >> 17) | ({w24} << 15)) ^ (({w24} >> 19) | ({w24} << 13)) ^ ({w24} >> 10)) = ?
+if up = (ok) goto (push ({w26} = {(in = up)}))
+math_run {w11} + ((({w12} >> 7) | ({w12} << 25)) ^ (({w12} >> 18) | ({w12} << 14)) ^ ({w12} >> 3)) + {w20} + ((({w25} >> 17) | ({w25} << 15)) ^ (({w25} >> 19) | ({w25} << 13)) ^ ({w25} >> 10)) = ?
+if up = (ok) goto (push ({w27} = {(in = up)}))
+math_run {w12} + ((({w13} >> 7) | ({w13} << 25)) ^ (({w13} >> 18) | ({w13} << 14)) ^ ({w13} >> 3)) + {w21} + ((({w26} >> 17) | ({w26} << 15)) ^ (({w26} >> 19) | ({w26} << 13)) ^ ({w26} >> 10)) = ?
+if up = (ok) goto (push ({w28} = {(in = up)}))
+math_run {w13} + ((({w14} >> 7) | ({w14} << 25)) ^ (({w14} >> 18) | ({w14} << 14)) ^ ({w14} >> 3)) + {w22} + ((({w27} >> 17) | ({w27} << 15)) ^ (({w27} >> 19) | ({w27} << 13)) ^ ({w27} >> 10)) = ?
+if up = (ok) goto (push ({w29} = {(in = up)}))
+math_run {w14} + ((({w15} >> 7) | ({w15} << 25)) ^ (({w15} >> 18) | ({w15} << 14)) ^ ({w15} >> 3)) + {w23} + ((({w28} >> 17) | ({w28} << 15)) ^ (({w28} >> 19) | ({w28} << 13)) ^ ({w28} >> 10)) = ?
+if up = (ok) goto (push ({w30} = {(in = up)}))
+math_run {w15} + ((({w16} >> 7) | ({w16} << 25)) ^ (({w16} >> 18) | ({w16} << 14)) ^ ({w16} >> 3)) + {w24} + ((({w29} >> 17) | ({w29} << 15)) ^ (({w29} >> 19) | ({w29} << 13)) ^ ({w29} >> 10)) = ?
+if up = (ok) goto (push ({w31} = {(in = up)}))
+math_run {w16} + ((({w17} >> 7) | ({w17} << 25)) ^ (({w17} >> 18) | ({w17} << 14)) ^ ({w17} >> 3)) + {w25} + ((({w30} >> 17) | ({w30} << 15)) ^ (({w30} >> 19) | ({w30} << 13)) ^ ({w30} >> 10)) = ?
+if up = (ok) goto (push ({w32} = {(in = up)}))
+math_run {w17} + ((({w18} >> 7) | ({w18} << 25)) ^ (({w18} >> 18) | ({w18} << 14)) ^ ({w18} >> 3)) + {w26} + ((({w31} >> 17) | ({w31} << 15)) ^ (({w31} >> 19) | ({w31} << 13)) ^ ({w31} >> 10)) = ?
+if up = (ok) goto (push ({w33} = {(in = up)}))
+math_run {w18} + ((({w19} >> 7) | ({w19} << 25)) ^ (({w19} >> 18) | ({w19} << 14)) ^ ({w19} >> 3)) + {w27} + ((({w32} >> 17) | ({w32} << 15)) ^ (({w32} >> 19) | ({w32} << 13)) ^ ({w32} >> 10)) = ?
+if up = (ok) goto (push ({w34} = {(in = up)}))
+math_run {w19} + ((({w20} >> 7) | ({w20} << 25)) ^ (({w20} >> 18) | ({w20} << 14)) ^ ({w20} >> 3)) + {w28} + ((({w33} >> 17) | ({w33} << 15)) ^ (({w33} >> 19) | ({w33} << 13)) ^ ({w33} >> 10)) = ?
+if up = (ok) goto (push ({w35} = {(in = up)}))
+math_run {w20} + ((({w21} >> 7) | ({w21} << 25)) ^ (({w21} >> 18) | ({w21} << 14)) ^ ({w21} >> 3)) + {w29} + ((({w34} >> 17) | ({w34} << 15)) ^ (({w34} >> 19) | ({w34} << 13)) ^ ({w34} >> 10)) = ?
+if up = (ok) goto (push ({w36} = {(in = up)}))
+math_run {w21} + ((({w22} >> 7) | ({w22} << 25)) ^ (({w22} >> 18) | ({w22} << 14)) ^ ({w22} >> 3)) + {w30} + ((({w35} >> 17) | ({w35} << 15)) ^ (({w35} >> 19) | ({w35} << 13)) ^ ({w35} >> 10)) = ?
+if up = (ok) goto (push ({w37} = {(in = up)}))
+math_run {w22} + ((({w23} >> 7) | ({w23} << 25)) ^ (({w23} >> 18) | ({w23} << 14)) ^ ({w23} >> 3)) + {w31} + ((({w36} >> 17) | ({w36} << 15)) ^ (({w36} >> 19) | ({w36} << 13)) ^ ({w36} >> 10)) = ?
+if up = (ok) goto (push ({w38} = {(in = up)}))
+math_run {w23} + ((({w24} >> 7) | ({w24} << 25)) ^ (({w24} >> 18) | ({w24} << 14)) ^ ({w24} >> 3)) + {w32} + ((({w37} >> 17) | ({w37} << 15)) ^ (({w37} >> 19) | ({w37} << 13)) ^ ({w37} >> 10)) = ?
+if up = (ok) goto (push ({w39} = {(in = up)}))
+math_run {w24} + ((({w25} >> 7) | ({w25} << 25)) ^ (({w25} >> 18) | ({w25} << 14)) ^ ({w25} >> 3)) + {w33} + ((({w38} >> 17) | ({w38} << 15)) ^ (({w38} >> 19) | ({w38} << 13)) ^ ({w38} >> 10)) = ?
+if up = (ok) goto (push ({w40} = {(in = up)}))
+math_run {w25} + ((({w26} >> 7) | ({w26} << 25)) ^ (({w26} >> 18) | ({w26} << 14)) ^ ({w26} >> 3)) + {w34} + ((({w39} >> 17) | ({w39} << 15)) ^ (({w39} >> 19) | ({w39} << 13)) ^ ({w39} >> 10)) = ?
+if up = (ok) goto (push ({w41} = {(in = up)}))
+math_run {w26} + ((({w27} >> 7) | ({w27} << 25)) ^ (({w27} >> 18) | ({w27} << 14)) ^ ({w27} >> 3)) + {w35} + ((({w40} >> 17) | ({w40} << 15)) ^ (({w40} >> 19) | ({w40} << 13)) ^ ({w40} >> 10)) = ?
+if up = (ok) goto (push ({w42} = {(in = up)}))
+math_run {w27} + ((({w28} >> 7) | ({w28} << 25)) ^ (({w28} >> 18) | ({w28} << 14)) ^ ({w28} >> 3)) + {w36} + ((({w41} >> 17) | ({w41} << 15)) ^ (({w41} >> 19) | ({w41} << 13)) ^ ({w41} >> 10)) = ?
+if up = (ok) goto (push ({w43} = {(in = up)}))
+math_run {w28} + ((({w29} >> 7) | ({w29} << 25)) ^ (({w29} >> 18) | ({w29} << 14)) ^ ({w29} >> 3)) + {w37} + ((({w42} >> 17) | ({w42} << 15)) ^ (({w42} >> 19) | ({w42} << 13)) ^ ({w42} >> 10)) = ?
+if up = (ok) goto (push ({w44} = {(in = up)}))
+math_run {w29} + ((({w30} >> 7) | ({w30} << 25)) ^ (({w30} >> 18) | ({w30} << 14)) ^ ({w30} >> 3)) + {w38} + ((({w43} >> 17) | ({w43} << 15)) ^ (({w43} >> 19) | ({w43} << 13)) ^ ({w43} >> 10)) = ?
+if up = (ok) goto (push ({w45} = {(in = up)}))
+math_run {w30} + ((({w31} >> 7) | ({w31} << 25)) ^ (({w31} >> 18) | ({w31} << 14)) ^ ({w31} >> 3)) + {w39} + ((({w44} >> 17) | ({w44} << 15)) ^ (({w44} >> 19) | ({w44} << 13)) ^ ({w44} >> 10)) = ?
+if up = (ok) goto (push ({w46} = {(in = up)}))
+math_run {w31} + ((({w32} >> 7) | ({w32} << 25)) ^ (({w32} >> 18) | ({w32} << 14)) ^ ({w32} >> 3)) + {w40} + ((({w45} >> 17) | ({w45} << 15)) ^ (({w45} >> 19) | ({w45} << 13)) ^ ({w45} >> 10)) = ?
+if up = (ok) goto (push ({w47} = {(in = up)}))
+math_run {w32} + ((({w33} >> 7) | ({w33} << 25)) ^ (({w33} >> 18) | ({w33} << 14)) ^ ({w33} >> 3)) + {w41} + ((({w46} >> 17) | ({w46} << 15)) ^ (({w46} >> 19) | ({w46} << 13)) ^ ({w46} >> 10)) = ?
+if up = (ok) goto (push ({w48} = {(in = up)}))
+math_run {w33} + ((({w34} >> 7) | ({w34} << 25)) ^ (({w34} >> 18) | ({w34} << 14)) ^ ({w34} >> 3)) + {w42} + ((({w47} >> 17) | ({w47} << 15)) ^ (({w47} >> 19) | ({w47} << 13)) ^ ({w47} >> 10)) = ?
+if up = (ok) goto (push ({w49} = {(in = up)}))
+math_run {w34} + ((({w35} >> 7) | ({w35} << 25)) ^ (({w35} >> 18) | ({w35} << 14)) ^ ({w35} >> 3)) + {w43} + ((({w48} >> 17) | ({w48} << 15)) ^ (({w48} >> 19) | ({w48} << 13)) ^ ({w48} >> 10)) = ?
+if up = (ok) goto (push ({w50} = {(in = up)}))
+math_run {w35} + ((({w36} >> 7) | ({w36} << 25)) ^ (({w36} >> 18) | ({w36} << 14)) ^ ({w36} >> 3)) + {w44} + ((({w49} >> 17) | ({w49} << 15)) ^ (({w49} >> 19) | ({w49} << 13)) ^ ({w49} >> 10)) = ?
+if up = (ok) goto (push ({w51} = {(in = up)}))
+math_run {w36} + ((({w37} >> 7) | ({w37} << 25)) ^ (({w37} >> 18) | ({w37} << 14)) ^ ({w37} >> 3)) + {w45} + ((({w50} >> 17) | ({w50} << 15)) ^ (({w50} >> 19) | ({w50} << 13)) ^ ({w50} >> 10)) = ?
+if up = (ok) goto (push ({w52} = {(in = up)}))
+math_run {w37} + ((({w38} >> 7) | ({w38} << 25)) ^ (({w38} >> 18) | ({w38} << 14)) ^ ({w38} >> 3)) + {w46} + ((({w51} >> 17) | ({w51} << 15)) ^ (({w51} >> 19) | ({w51} << 13)) ^ ({w51} >> 10)) = ?
+if up = (ok) goto (push ({w53} = {(in = up)}))
+math_run {w38} + ((({w39} >> 7) | ({w39} << 25)) ^ (({w39} >> 18) | ({w39} << 14)) ^ ({w39} >> 3)) + {w47} + ((({w52} >> 17) | ({w52} << 15)) ^ (({w52} >> 19) | ({w52} << 13)) ^ ({w52} >> 10)) = ?
+if up = (ok) goto (push ({w54} = {(in = up)}))
+math_run {w39} + ((({w40} >> 7) | ({w40} << 25)) ^ (({w40} >> 18) | ({w40} << 14)) ^ ({w40} >> 3)) + {w48} + ((({w53} >> 17) | ({w53} << 15)) ^ (({w53} >> 19) | ({w53} << 13)) ^ ({w53} >> 10)) = ?
+if up = (ok) goto (push ({w55} = {(in = up)}))
+math_run {w40} + ((({w41} >> 7) | ({w41} << 25)) ^ (({w41} >> 18) | ({w41} << 14)) ^ ({w41} >> 3)) + {w49} + ((({w54} >> 17) | ({w54} << 15)) ^ (({w54} >> 19) | ({w54} << 13)) ^ ({w54} >> 10)) = ?
+if up = (ok) goto (push ({w56} = {(in = up)}))
+math_run {w41} + ((({w42} >> 7) | ({w42} << 25)) ^ (({w42} >> 18) | ({w42} << 14)) ^ ({w42} >> 3)) + {w50} + ((({w55} >> 17) | ({w55} << 15)) ^ (({w55} >> 19) | ({w55} << 13)) ^ ({w55} >> 10)) = ?
+if up = (ok) goto (push ({w57} = {(in = up)}))
+math_run {w42} + ((({w43} >> 7) | ({w43} << 25)) ^ (({w43} >> 18) | ({w43} << 14)) ^ ({w43} >> 3)) + {w51} + ((({w56} >> 17) | ({w56} << 15)) ^ (({w56} >> 19) | ({w56} << 13)) ^ ({w56} >> 10)) = ?
+if up = (ok) goto (push ({w58} = {(in = up)}))
+math_run {w43} + ((({w44} >> 7) | ({w44} << 25)) ^ (({w44} >> 18) | ({w44} << 14)) ^ ({w44} >> 3)) + {w52} + ((({w57} >> 17) | ({w57} << 15)) ^ (({w57} >> 19) | ({w57} << 13)) ^ ({w57} >> 10)) = ?
+if up = (ok) goto (push ({w59} = {(in = up)}))
+math_run {w44} + ((({w45} >> 7) | ({w45} << 25)) ^ (({w45} >> 18) | ({w45} << 14)) ^ ({w45} >> 3)) + {w53} + ((({w58} >> 17) | ({w58} << 15)) ^ (({w58} >> 19) | ({w58} << 13)) ^ ({w58} >> 10)) = ?
+if up = (ok) goto (push ({w60} = {(in = up)}))
+math_run {w45} + ((({w46} >> 7) | ({w46} << 25)) ^ (({w46} >> 18) | ({w46} << 14)) ^ ({w46} >> 3)) + {w54} + ((({w59} >> 17) | ({w59} << 15)) ^ (({w59} >> 19) | ({w59} << 13)) ^ ({w59} >> 10)) = ?
+if up = (ok) goto (push ({w61} = {(in = up)}))
+math_run {w46} + ((({w47} >> 7) | ({w47} << 25)) ^ (({w47} >> 18) | ({w47} << 14)) ^ ({w47} >> 3)) + {w55} + ((({w60} >> 17) | ({w60} << 15)) ^ (({w60} >> 19) | ({w60} << 13)) ^ ({w60} >> 10)) = ?
+if up = (ok) goto (push ({w62} = {(in = up)}))
+math_run {w47} + ((({w48} >> 7) | ({w48} << 25)) ^ (({w48} >> 18) | ({w48} << 14)) ^ ({w48} >> 3)) + {w56} + ((({w61} >> 17) | ({w61} << 15)) ^ (({w61} >> 19) | ({w61} << 13)) ^ ({w61} >> 10)) = ?
+if up = (ok) goto (push ({w63} = {(in = up)}))
+push ({a} = {"1779033703"})
+push ({b} = {"3144134277"})
+push ({c} = {"1013904242"})
+push ({d} = {"2773480762"})
+push ({e} = {"1359893119"})
+push ({f} = {"2600822924"})
+push ({g} = {"528734635"})
+push ({h} = {"1541459225"})
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 0) + {w0} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 1) + {w1} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 2) + {w2} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 3) + {w3} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 4) + {w4} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 5) + {w5} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 6) + {w6} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 7) + {w7} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 8) + {w8} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 9) + {w9} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 10) + {w10} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 11) + {w11} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 12) + {w12} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 13) + {w13} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 14) + {w14} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 15) + {w15} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 16) + {w16} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 17) + {w17} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 18) + {w18} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 19) + {w19} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 20) + {w20} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 21) + {w21} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 22) + {w22} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 23) + {w23} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 24) + {w24} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 25) + {w25} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 26) + {w26} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 27) + {w27} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 28) + {w28} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 29) + {w29} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 30) + {w30} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 31) + {w31} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 32) + {w32} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 33) + {w33} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 34) + {w34} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 35) + {w35} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 36) + {w36} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 37) + {w37} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 38) + {w38} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 39) + {w39} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 40) + {w40} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 41) + {w41} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 42) + {w42} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 43) + {w43} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 44) + {w44} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 45) + {w45} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 46) + {w46} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 47) + {w47} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 48) + {w48} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 49) + {w49} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 50) + {w50} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 51) + {w51} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 52) + {w52} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 53) + {w53} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 54) + {w54} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 55) + {w55} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 56) + {w56} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 57) + {w57} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 58) + {w58} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 59) + {w59} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 60) + {w60} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 61) + {w61} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 62) + {w62} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run {h} + ((({e} >> 6) | ({e} << 26)) ^ (({e} >> 11) | ({e} << 21)) ^ (({e} >> 25) | ({e} << 7))) + (({e} & {f}) ^ ((~{e}) & {g})) + array_at(KS, 63) + {w63} = ?
+if up = (ok) goto (push ({T1} = {(in = up)}))
+math_run ((({a} >> 2) | ({a} << 30)) ^ (({a} >> 13) | ({a} << 19)) ^ (({a} >> 22) | ({a} << 10))) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c})) = ?
+if up = (ok) goto (push ({T2} = {(in = up)}))
+push ({h} = {g})
+push ({g} = {f})
+push ({f} = {e})
+math_run {d} + {T1} = ?
+if up = (ok) goto (push ({e} = {(in = up)}))
+push ({d} = {c})
+push ({c} = {b})
+push ({b} = {a})
+math_run {T1} + {T2} = ?
+if up = (ok) goto (push ({a} = {(in = up)}))
+math_run array_at(HS, 0) = ?
+if up = (ok) goto (push ({H0} = {(in = up)}))
+math_run array_at(HS, 1) = ?
+if up = (ok) goto (push ({H1} = {(in = up)}))
+math_run array_at(HS, 2) = ?
+if up = (ok) goto (push ({H2} = {(in = up)}))
+math_run array_at(HS, 3) = ?
+if up = (ok) goto (push ({H3} = {(in = up)}))
+math_run array_at(HS, 4) = ?
+if up = (ok) goto (push ({H4} = {(in = up)}))
+math_run array_at(HS, 5) = ?
+if up = (ok) goto (push ({H5} = {(in = up)}))
+math_run array_at(HS, 6) = ?
+if up = (ok) goto (push ({H6} = {(in = up)}))
+math_run array_at(HS, 7) = ?
+if up = (ok) goto (push ({H7} = {(in = up)}))
+math_run 1779033703 + {a} = ?
+if up = (ok) goto (push ({o0} = {(in = up)}))
+math_run hex({o0}, 8) = ?
+if up = (ok) goto (push ({x0} = {(in = up)}))
+push ({digest0} = {x0})
+math_run 3144134277 + {b} = ?
+if up = (ok) goto (push ({o1} = {(in = up)}))
+math_run hex({o1}, 8) = ?
+if up = (ok) goto (push ({x1} = {(in = up)}))
+push ({digest1} = {x1})
+math_run 1013904242 + {c} = ?
+if up = (ok) goto (push ({o2} = {(in = up)}))
+math_run hex({o2}, 8) = ?
+if up = (ok) goto (push ({x2} = {(in = up)}))
+push ({digest2} = {x2})
+math_run 2773480762 + {d} = ?
+if up = (ok) goto (push ({o3} = {(in = up)}))
+math_run hex({o3}, 8) = ?
+if up = (ok) goto (push ({x3} = {(in = up)}))
+push ({digest3} = {x3})
+math_run 1359893119 + {e} = ?
+if up = (ok) goto (push ({o4} = {(in = up)}))
+math_run hex({o4}, 8) = ?
+if up = (ok) goto (push ({x4} = {(in = up)}))
+push ({digest4} = {x4})
+math_run 2600822924 + {f} = ?
+if up = (ok) goto (push ({o5} = {(in = up)}))
+math_run hex({o5}, 8) = ?
+if up = (ok) goto (push ({x5} = {(in = up)}))
+push ({digest5} = {x5})
+math_run 528734635 + {g} = ?
+if up = (ok) goto (push ({o6} = {(in = up)}))
+math_run hex({o6}, 8) = ?
+if up = (ok) goto (push ({x6} = {(in = up)}))
+push ({digest6} = {x6})
+math_run 1541459225 + {h} = ?
+if up = (ok) goto (push ({o7} = {(in = up)}))
+math_run hex({o7}, 8) = ?
+if up = (ok) goto (push ({x7} = {(in = up)}))
+push ({digest7} = {x7})
+push ({part0} = {digest0})
+push ({full} = {x0})
+push ({full} = {full} (and) {x1})
+push ({full} = {full} (and) {x2})
+push ({full} = {full} (and) {x3})
+push ({full} = {full} (and) {x4})
+push ({full} = {full} (and) {x5})
+push ({full} = {full} (and) {x6})
+push ({full} = {full} (and) {x7})
+print (<{full}>)

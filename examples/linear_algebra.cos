@@ -1,0 +1,108 @@
+#% v5 linear algebra: NxM matrices, matrix products, inverses and solve_linear.
+#% Matrices are written as nested lists and stored with their shape, so a
+#% non-square transpose keeps its 3x2 / 2x3 dimensions.
+
+#%***********************
+#% 1. Shape queries and indexing. Indexing is row, then column, both from 0.
+#%***********************
+array M = [[1, 2, 3], [4, 5, 6]]
+math_run matrix_rows(M) = ?
+if up = (ok) goto (push ({rows} = {(in = up)}))
+math_run matrix_cols(M) = ?
+if up = (ok) goto (push ({columns} = {(in = up)}))
+math_run matrix_at(M, 1, 2) = ?
+if up = (ok) goto (push ({corner} = {(in = up)}))
+print (<{rows}>)
+print (<{columns}>)
+print (<{corner}>)
+
+#%***********************
+#% 2. A 3x2 matrix times a 2x2 matrix gives a 3x2 matrix.
+#%***********************
+push ({product} = matrix_mul([[1, 2], [3, 4], [5, 6]], [[7, 8], [9, 10]]))
+math_run matrix_rows({product}) = ?
+if up = (ok) goto (push ({product_rows} = {(in = up)}))
+math_run matrix_cols({product}) = ?
+if up = (ok) goto (push ({product_columns} = {(in = up)}))
+math_run matrix_at({product}, 0, 0) = ?
+if up = (ok) goto (push ({top_left} = {(in = up)}))
+math_run matrix_at({product}, 2, 1) = ?
+if up = (ok) goto (push ({bottom_right} = {(in = up)}))
+print (<{product_rows}>)
+print (<{product_columns}>)
+print (<{top_left}>)
+print (<{bottom_right}>)
+
+#%***********************
+#% 3. Transposing a 2x3 gives a 3x2, and the shape travels with the value.
+#%***********************
+push ({flipped} = matrix_transpose([[1, 2, 3], [4, 5, 6]]))
+math_run matrix_rows({flipped}) = ?
+if up = (ok) goto (push ({flipped_rows} = {(in = up)}))
+math_run matrix_at({flipped}, 2, 1) = ?
+if up = (ok) goto (push ({flipped_value} = {(in = up)}))
+print (<{flipped_rows}>)
+print (<{flipped_value}>)
+
+#%***********************
+#% 4. Inverses of order 2 and 3. matrix2_inverse/matrix3_inverse only handle
+#% real-valued square matrices; singular input stops the program with an error.
+#%***********************
+push ({inverse2} = matrix2_inverse([[4, 7], [2, 6]]))
+math_run matrix_at({inverse2}, 0, 0) = ?
+if up = (ok) goto (push ({inv2_a} = {(in = up)}))
+math_run matrix_at({inverse2}, 1, 1) = ?
+if up = (ok) goto (push ({inv2_d} = {(in = up)}))
+print (<{inv2_a}>)
+print (<{inv2_d}>)
+
+push ({inverse3} = matrix3_inverse([[1, 2, 3], [0, 1, 4], [5, 6, 0]]))
+math_run matrix_at({inverse3}, 0, 0) = ?
+if up = (ok) goto (push ({inv3_a} = {(in = up)}))
+math_run matrix_at({inverse3}, 2, 2) = ?
+if up = (ok) goto (push ({inv3_i} = {(in = up)}))
+print (<{inv3_a}>)
+print (<{inv3_i}>)
+
+#%***********************
+#% 5. A * inverse(A) is the identity, up to floating point noise.
+#%***********************
+push ({identity} = matrix_mul(matrix2_inverse([[4, 7], [2, 6]]), [[4, 7], [2, 6]]))
+math_run matrix_at({identity}, 0, 0) = ?
+if up = (ok) goto (push ({identity_00} = {(in = up)}))
+math_run matrix_at({identity}, 1, 0) = ?
+if up = (ok) goto (push ({identity_10} = {(in = up)}))
+print (<{identity_00}>)
+print (<{identity_10}>)
+
+#%***********************
+#% 6. solve_linear returns the solution as a plain array, so use array_at.
+#% Equation set:   x +  y = 3
+#%                2x + 3y = 8   ->  x = 1, y = 2
+#%***********************
+array A = [[1, 1], [2, 3]]
+array B = [3, 8]
+push ({solution} = solve_linear(A, B))
+math_run array_len({solution}) = ?
+if up = (ok) goto (push ({solution_length} = {(in = up)}))
+math_run array_at({solution}, 0) = ?
+if up = (ok) goto (push ({x} = {(in = up)}))
+math_run array_at({solution}, 1) = ?
+if up = (ok) goto (push ({y} = {(in = up)}))
+print (<{solution_length}>)
+print (<{x}>)
+print (<{y}>)
+
+#%***********************
+#% 7. A 3x3 system with a known answer (2, 3, -1).
+#%***********************
+push ({system} = solve_linear([[2, 1, -1], [-3, -1, 2], [-2, 1, 2]], [8, -11, -3]))
+math_run array_at({system}, 0) = ?
+if up = (ok) goto (push ({system_x} = {(in = up)}))
+math_run array_at({system}, 1) = ?
+if up = (ok) goto (push ({system_y} = {(in = up)}))
+math_run array_at({system}, 2) = ?
+if up = (ok) goto (push ({system_z} = {(in = up)}))
+print (<{system_x}>)
+print (<{system_y}>)
+print (<{system_z}>)

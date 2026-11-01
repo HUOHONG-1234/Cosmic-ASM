@@ -1,0 +1,27 @@
+#% 凯撒密码：只处理大写字母，位移 3
+#math
+call = (math)
+push ({s} = {"HELLO"})
+push ({out} = {""})
+push ({i} = {"0"})
+math_run strlen({s}) = ? -int32
+if up = (ok) goto (push ({n} = {(in = up)}))
+while ({i} < {n})
+{
+    math_run char_at({s}, {i}) = ? -int32
+    if up = (ok) goto (push ({ch} = {(in = up)}))
+    math_run ord({ch}) = ? -int32
+    if up = (ok) goto (push ({o} = {(in = up)}))
+    math_run {o} - 65 = ? -int32
+    if up = (ok) goto (push ({p} = {(in = up)}))
+    math_run ({p} + 3) % 26 = ? -int32
+    if up = (ok) goto (push ({q} = {(in = up)}))
+    math_run {q} + 65 = ? -int32
+    if up = (ok) goto (push ({r} = {(in = up)}))
+    math_run chr({r}) = ? -int32
+    if up = (ok) goto (push ({c2} = {(in = up)}))
+    push ({out} = {out} (and) {c2})
+    math_run {i} + 1 = ? -int32
+    if up = (ok) goto (push ({i} = {(in = up)}))
+}
+print (<{out}>)

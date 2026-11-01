@@ -1,0 +1,128 @@
+#% v5 numerics: integration, statistics and special functions.
+#% Statistics and integration take a plain array; special functions take scalars.
+#%
+#% #%precision = 12 keeps this example byte-identical between the interpreter
+#% and the compiled binary: lgamma/beta delegate to the platform libm, and the
+#% two implementations can disagree in the last stored digit.
+#%precision = 12
+
+#%***********************
+#% 1. Trapezoidal rule and Simpson's rule over uniformly spaced samples.
+#% Sampling x^2 at x = 0,1,2,3,4 with step 1.
+#% Simpson is exact for quadratics, so it reproduces the true integral 64/3.
+#%***********************
+array square_samples = [0, 1, 4, 9, 16]
+math_run trapz(square_samples, 1) = ?
+if up = (ok) goto (push ({trapezoid} = {(in = up)}))
+math_run simpson(square_samples, 1) = ?
+if up = (ok) goto (push ({simpson_result} = {(in = up)}))
+print (<{trapezoid}>)
+print (<{simpson_result}>)
+
+#% The same samples with a different step, i.e. integrating over a 2x range.
+math_run trapz(square_samples, 2) = ?
+if up = (ok) goto (push ({scaled} = {(in = up)}))
+print (<{scaled}>)
+
+#%***********************
+#% 2. The same integral computed by COS itself, for comparison.
+#% Trapezoid rule written out by hand: sum of (f(x_i) + f(x_i+1)) / 2 * h.
+#%***********************
+function square(x) = x * x
+array hand_samples = [square(0), square(1), square(2), square(3), square(4)]
+math_run trapz(hand_samples, 1) = ?
+if up = (ok) goto (push ({hand_trapezoid} = {(in = up)}))
+print (<{hand_trapezoid}>)
+
+#%***********************
+#% 3. Descriptive statistics. variance is the population variance, matching std.
+#%***********************
+array data = [4, 8, 15, 16, 23, 42]
+math_run mean(data) = ?
+if up = (ok) goto (push ({average} = {(in = up)}))
+math_run median(data) = ?
+if up = (ok) goto (push ({middle} = {(in = up)}))
+math_run variance(data) = ?
+if up = (ok) goto (push ({spread} = {(in = up)}))
+math_run std(data) = ?
+if up = (ok) goto (push ({deviation} = {(in = up)}))
+math_run min(data) = ?
+if up = (ok) goto (push ({lowest} = {(in = up)}))
+math_run max(data) = ?
+if up = (ok) goto (push ({highest} = {(in = up)}))
+print (<{average}>)
+print (<{middle}>)
+print (<{spread}>)
+print (<{deviation}>)
+print (<{lowest}>)
+print (<{highest}>)
+
+#%***********************
+#% 4. Median of an even count averages the two middle values.
+#%***********************
+math_run median([10, 2, 8, 4]) = ?
+if up = (ok) goto (push ({even_median} = {(in = up)}))
+print (<{even_median}>)
+
+#%***********************
+#% 5. Percentiles interpolate between neighbouring samples.
+#%***********************
+math_run percentile(data, 0) = ?
+if up = (ok) goto (push ({p0} = {(in = up)}))
+math_run percentile(data, 50) = ?
+if up = (ok) goto (push ({p50} = {(in = up)}))
+math_run percentile(data, 100) = ?
+if up = (ok) goto (push ({p100} = {(in = up)}))
+print (<{p0}>)
+print (<{p50}>)
+print (<{p100}>)
+
+#%***********************
+#% 6. Pearson correlation: perfectly linear series give exactly 1 or -1.
+#%***********************
+array xs = [1, 2, 3, 4, 5]
+array rising = [2, 4, 6, 8, 10]
+array falling = [10, 8, 6, 4, 2]
+math_run correlation(xs, rising) = ?
+if up = (ok) goto (push ({positive} = {(in = up)}))
+math_run correlation(xs, falling) = ?
+if up = (ok) goto (push ({negative} = {(in = up)}))
+print (<{positive}>)
+print (<{negative}>)
+
+#%***********************
+#% 7. Special functions.
+#% lgamma(5) = ln(4!) = ln(24); erfc(0) = 1; beta(2,3) = 1/12.
+#% zeta(2) = pi^2/6 and zeta(4) = pi^4/90, so they act as built-in checks.
+#%***********************
+math_run lgamma(5) = ?
+if up = (ok) goto (push ({log_gamma} = {(in = up)}))
+math_run erfc(0) = ?
+if up = (ok) goto (push ({complementary_error} = {(in = up)}))
+math_run beta(2, 3) = ?
+if up = (ok) goto (push ({beta_value} = {(in = up)}))
+math_run zeta(2) = ?
+if up = (ok) goto (push ({zeta_two} = {(in = up)}))
+math_run zeta(4) = ?
+if up = (ok) goto (push ({zeta_four} = {(in = up)}))
+print (<{log_gamma}>)
+print (<{complementary_error}>)
+print (<{beta_value}>)
+print (<{zeta_two}>)
+print (<{zeta_four}>)
+
+#%***********************
+#% 8. Refining the mesh tightens the trapezoid error: Simpson stays exact.
+#% Integrating x^2 over [0,1] with step 0.25 and 0.125.
+#%***********************
+array coarse = [0, 0.0625, 0.25, 0.5625, 1]
+array fine = [0, 0.015625, 0.0625, 0.140625, 0.25, 0.390625, 0.5625, 0.765625, 1]
+math_run trapz(coarse, 0.25) = ?
+if up = (ok) goto (push ({coarse_area} = {(in = up)}))
+math_run trapz(fine, 0.125) = ?
+if up = (ok) goto (push ({fine_area} = {(in = up)}))
+math_run simpson(fine, 0.125) = ?
+if up = (ok) goto (push ({simpson_area} = {(in = up)}))
+print (<{coarse_area}>)
+print (<{fine_area}>)
+print (<{simpson_area}>)

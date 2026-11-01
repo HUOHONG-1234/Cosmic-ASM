@@ -1,0 +1,8 @@
+#% 梅钦公式: pi/4 = 4*atan(1/5) - atan(1/239)
+#math
+call = (math)
+math_run 4 * atan(1 / 5) - atan(1 / 239) = ? -float64
+if up = (ok) goto (push ({quarter} = {(in = up)}))
+math_run {quarter} * 4 = ? -float64
+if up = (ok) goto (push ({pi_value} = {(in = up)}))
+print (<{pi_value}>)

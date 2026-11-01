@@ -1,0 +1,7 @@
+<Project Sdk="WixToolset.Sdk/4.0.6">
+  <PropertyGroup>
+    <OutputType>Package</OutputType>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <DefineConstants>BinaryDirectory=$(BinaryDirectory)</DefineConstants>
+  </PropertyGroup>
+</Project>

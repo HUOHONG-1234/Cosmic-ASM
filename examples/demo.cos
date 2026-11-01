@@ -1,0 +1,36 @@
+#% Cosmic ASM example program
+#execute
+#pe
+#hello = GBK
+push ({hello} = {"hello_world"})
+
+call = (execute)
+father = (up)
+start(loop) = {loop}
+{
+    sleep(0.01){s}
+    print(<{hello}>) -GBK
+    if up = (error) goto (to = stop)
+    kill{hello} -force
+}
+dog(loop) = {stop}
+
+start(normal) = {open}
+{
+    hello
+    call = (execute)
+    father = up
+    open = (open = (open = (bash = dir) ) )
+    if up = (ok) goto (push ({dir} = {(in = up)} -GBK ) )
+    print (<{dir}>) -GBK
+}
+dog(status) = {ok}
+
+call = (math)
+father = (up)
+start(normal) = {math}
+{
+    math_run (1) + (1) = ?
+    if up = (ok) goto (push ({math} = {(in = up)} -GBK ) )
+    print (<{math}>) -GBK
+}

@@ -1,0 +1,61 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# ---- 构建产物 ----
+build/
+dist/
+*.spec.bak
+packaging/obj/
+packaging/bin/
+*.egg-info/
+
+# ---- 编译生成 ----
+*.exe
+*.o
+*.obj
+*.pdb
+*.ilk
+# 由 .cos 生成的 C 源码
+examples/*.c
+build/*.c
+
+# ---- 临时测试文件 ----
+_*.cos
+_t_*.cos
+_bt_*.cos
+*.cos.bak
+*.bak_*
+*.tmp
+*.log
+
+# ---- 编辑器 ----
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ---- 系统 ----
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ---- 数据与密钥 ----
+*.db
+*.db-wal
+*.db-shm
+data/
+config.local.php
+.env

@@ -1,0 +1,34 @@
+#% 维吉尼亚密码：只处理大写字母，密钥循环使用
+#math
+call = (math)
+push ({s} = {"HELLO"})
+push ({k} = {"KEY"})
+push ({out} = {""})
+push ({i} = {"0"})
+math_run strlen({s}) = ? -int32
+if up = (ok) goto (push ({n} = {(in = up)}))
+math_run strlen({k}) = ? -int32
+if up = (ok) goto (push ({m} = {(in = up)}))
+while ({i} < {n})
+{
+    math_run {i} % {m} = ? -int32
+    if up = (ok) goto (push ({ki} = {(in = up)}))
+    math_run char_at({s}, {i}) = ? -int32
+    if up = (ok) goto (push ({p1} = {(in = up)}))
+    math_run char_at({k}, {ki}) = ? -int32
+    if up = (ok) goto (push ({c1} = {(in = up)}))
+    math_run ord({p1}) - 65 = ? -int32
+    if up = (ok) goto (push ({p2} = {(in = up)}))
+    math_run ord({c1}) - 65 = ? -int32
+    if up = (ok) goto (push ({c2} = {(in = up)}))
+    math_run ({p2} + {c2}) % 26 = ? -int32
+    if up = (ok) goto (push ({q} = {(in = up)}))
+    math_run {q} + 65 = ? -int32
+    if up = (ok) goto (push ({r} = {(in = up)}))
+    math_run chr({r}) = ? -int32
+    if up = (ok) goto (push ({ch} = {(in = up)}))
+    push ({out} = {out} (and) {ch})
+    math_run {i} + 1 = ? -int32
+    if up = (ok) goto (push ({i} = {(in = up)}))
+}
+print (<{out}>)

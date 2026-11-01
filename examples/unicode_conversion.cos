@@ -1,0 +1,12 @@
+#%math = int32
+#math
+call = (math)
+
+push ({source} = {"你"})
+math_run ord({source}) = ? -int32
+if up = (ok) goto (push ({codepoint} = {(in = up)}))
+print (<{codepoint}>)
+
+math_run chr({codepoint}) = ?
+if up = (ok) goto (push ({character} = {(in = up)}))
+print (<{character}>)

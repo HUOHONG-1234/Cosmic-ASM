@@ -1,0 +1,24 @@
+#% v4 atom: a lock-protected counter shared by a three-step execution chain
+#atom
+call = (atom)
+
+push ({counter} = {"0"})
+
+#% father = up binds the block to the caller's context, so the lock guards the
+#% very variables the caller reads after the chain settles.
+father = up
+start(normal) = {worker}
+{
+    lock {worker}
+    {
+        math_run {counter} + 1 = ? -int64
+        if up = (ok) goto (push ({counter} = {(in = up)}))
+    }
+}
+
+proton {chain} = {worker} -> {worker} -> {worker}
+nuclear_reactor {main} = {chain}
+
+#% nuclear_reactor returns immediately; dog waits until the block settles.
+dog(worker) = (pass : ok) (error : error)
+print (<{counter}>)

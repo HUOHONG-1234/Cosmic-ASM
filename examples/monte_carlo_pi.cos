@@ -1,0 +1,25 @@
+#% 蒙特卡洛法算圆周率: 随机撒点, 落在四分圆内的比例 = pi/4
+#math
+call = (math)
+
+math_run 0 = ? -float64
+if up = (ok) goto (push ({inside} = {(in = up}))
+math_run 1 = ? -float64
+if up = (ok) goto (push ({n} = {(in = up}))
+while ({n} < 200000)
+{
+    math_run rag_range(10000, 0) / 10000 = ? -float64
+    if up = (ok) goto (push ({x} = {(in = up}))
+    math_run rag_range(10000, 0) / 10000 = ? -float64
+    if up = (ok) goto (push ({y} = {(in = up}))
+    if ({x} * {x} + {y} * {y} < 1)
+    {
+        math_run {inside} + 1 = ? -float64
+        if up = (ok) goto (push ({inside} = {(in = up}))
+    }
+    math_run {n} + 1 = ? -float64
+    if up = (ok) goto (push ({n} = {(in = up}))
+}
+math_run {inside} / {n} * 4 = ? -float64
+if up = (ok) goto (push ({pi_value} = {(in = up}))
+print (<{pi_value}>)

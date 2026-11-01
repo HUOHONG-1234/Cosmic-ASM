@@ -1,0 +1,34 @@
+#%科学运算、条件循环和动态磁带示例
+#%math = int32
+#math
+call = (math)
+
+math_run sin(pi / 2) + sqrt(9) = ? -float64
+if up = (ok) goto (push ({science} = {(in = up)}))
+print (<{science}>)
+
+math_run 0 = ?
+if up = (ok) goto (push ({counter} = {(in = up)}))
+while ({counter} < 5)
+{
+    math_run {counter} + 1 = ? -int32
+    if up = (ok) goto (push ({counter} = {(in = up)}))
+}
+print (<{counter}>)
+
+tape_create (work)
+tape_write (work) = {3}
+while (tape(work) > 0)
+{
+    if (tape(work) > 1)
+    {
+        tape_write (work) = {1}
+    }
+    else
+    {
+        tape_write (work) = {0}
+    }
+}
+tape_read (work) = ?
+if up {*} = (0) goto (push ({tape_status} = {"halted"}))
+print (<{tape_status}>)

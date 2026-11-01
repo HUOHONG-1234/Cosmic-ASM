@@ -1,0 +1,99 @@
+#% 三体引力模拟：太阳(固定在原点) + 地球 + 木星
+#% 单位：距离 AU，时间 年。GM_sun = 4*pi^2 = 39.478
+#% 数值方法：位置 Verlet (Störmer)，每步只算一次加速度
+#math
+call = (math)
+
+math_run 1.0 = ? -float64
+if up = (ok) goto (push ({ex} = {(in = up)}))
+math_run 0.0 = ? -float64
+if up = (ok) goto (push ({ey} = {(in = up)}))
+math_run 5.204 = ? -float64
+if up = (ok) goto (push ({jx} = {(in = up)}))
+math_run 0.0 = ? -float64
+if up = (ok) goto (push ({jy} = {(in = up)}))
+math_run 0.00274 = ? -float64
+if up = (ok) goto (push ({vx} = {(in = up)}))
+math_run 0.000000 = ? -float64
+if up = (ok) goto (push ({vy} = {(in = up)}))
+math_run 1.0 = ? -float64
+if up = (ok) goto (push ({exo} = {(in = up)}))
+math_run 0.0 = ? -float64
+if up = (ok) goto (push ({eyo} = {(in = up)}))
+math_run 5.204 = ? -float64
+if up = (ok) goto (push ({jxo} = {(in = up)}))
+math_run 0.0 = ? -float64
+if up = (ok) goto (push ({jyo} = {(in = up)}))
+math_run 0.0 = ? -float64
+if up = (ok) goto (push ({n} = {(in = up)}))
+
+#% 先把速度并入初值：用 x_prev = x - v*dt 表示「上一位置」
+math_run {ex} - 0.00274 * 0.00274 = ? -float64
+if up = (ok) goto (push ({exo} = {(in = up}))
+math_run {ey} - 2.0 * 3.1416 * 0.00274 = ? -float64
+if up = (ok) goto (push ({eyo} = {(in = up}))
+
+while ({n} < 36500)
+{
+    math_run {ex} - {jx} = ? -float64
+    if up = (ok) goto (push ({djx} = {(in = up}))
+    math_run {ey} - {jy} = ? -float64
+    if up = (ok) goto (push ({djy} = {(in = up}))
+    math_run {djx} * {djx} + {djy} * {djy} = ? -float64
+    if up = (ok) goto (push ({r2} = {(in = up}))
+    math_run {r2} * sqrt({r2}) = ? -float64
+    if up = (ok) goto (push ({r3} = {(in = up}))
+    math_run 0.037684 / {r3} = ? -float64
+    if up = (ok) goto (push ({ej} = {(in = up}))
+    math_run {ex} * {ex} + {ey} * {ey} = ? -float64
+    if up = (ok) goto (push ({re2} = {(in = up}))
+    math_run {re2} * sqrt({re2}) = ? -float64
+    if up = (ok) goto (push ({re3} = {(in = up}))
+    math_run 39.478 / {re3} = ? -float64
+    if up = (ok) goto (push ({es} = {(in = up}))
+    math_run -1 * {es} * {ex} - {ej} * {djx} = ? -float64
+    if up = (ok) goto (push ({eax} = {(in = up}))
+    math_run -1 * {es} * {ey} - {ej} * {djy} = ? -float64
+    if up = (ok) goto (push ({eay} = {(in = up}))
+    math_run {jx} * {jx} + {jy} * {jy} = ? -float64
+    if up = (ok) goto (push ({rj2} = {(in = up}))
+    math_run {rj2} * sqrt({rj2}) = ? -float64
+    if up = (ok) goto (push ({rj3} = {(in = up}))
+    math_run 39.478 / {rj3} = ? -float64
+    if up = (ok) goto (push ({js} = {(in = up}))
+    math_run 0.00011857 / {r3} = ? -float64
+    if up = (ok) goto (push ({em} = {(in = up}))
+    math_run -1 * {js} * {jx} + {em} * {djx} = ? -float64
+    if up = (ok) goto (push ({jax} = {(in = up}))
+    math_run -1 * {js} * {jy} + {em} * {djy} = ? -float64
+    if up = (ok) goto (push ({jay} = {(in = up}))
+    math_run 2 * {ex} - {exo} + {eax} * 0.000007505547 = ? -float64
+    if up = (ok) goto (push ({exn} = {(in = up}))
+    math_run 2 * {ey} - {eyo} + {eay} * 0.000007505547 = ? -float64
+    if up = (ok) goto (push ({eyn} = {(in = up}))
+    math_run 2 * {jx} - {jxo} + {jax} * 0.000007505547 = ? -float64
+    if up = (ok) goto (push ({jxn} = {(in = up}))
+    math_run 2 * {jy} - {jyo} + {jay} * 0.000007505547 = ? -float64
+    if up = (ok) goto (push ({jyn} = {(in = up}))
+    math_run {ex} = ? -float64
+    if up = (ok) goto (push ({exo} = {(in = up}))
+    math_run {ey} = ? -float64
+    if up = (ok) goto (push ({eyo} = {(in = up}))
+    math_run {jx} = ? -float64
+    if up = (ok) goto (push ({jxo} = {(in = up}))
+    math_run {jy} = ? -float64
+    if up = (ok) goto (push ({jyo} = {(in = up}))
+    math_run {exn} = ? -float64
+    if up = (ok) goto (push ({ex} = {(in = up}))
+    math_run {eyn} = ? -float64
+    if up = (ok) goto (push ({ey} = {(in = up}))
+    math_run {jxn} = ? -float64
+    if up = (ok) goto (push ({jx} = {(in = up}))
+    math_run {jyn} = ? -float64
+    if up = (ok) goto (push ({jy} = {(in = up}))
+    math_run {n} + 1 = ? -float64
+    if up = (ok) goto (push ({n} = {(in = up}))
+}
+math_run sqrt({ex} * {ex} + {ey} * {ey}) = ? -float64
+if up = (ok) goto (push ({dist} = {(in = up}))
+print (<{dist}>)

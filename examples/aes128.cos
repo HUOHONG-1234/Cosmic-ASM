@@ -1,0 +1,1431 @@
+#% v5 AES-128 encryption of one 16-byte block (FIPS-197).
+#% Exercises v5 bitwise operators, -uint32 wraparound and bytes arrays.
+#% This is a correctness demo, not a constant-time crypto implementation.
+#%math = uint32
+call = (math)
+#% AES S-box
+bytes SB = [0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76, 0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0, 0xb7, 0xfd, 0x93, 0x26, 0x36, 0x3f, 0xf7, 0xcc, 0x34, 0xa5, 0xe5, 0xf1, 0x71, 0xd8, 0x31, 0x15, 0x04, 0xc7, 0x23, 0xc3, 0x18, 0x96, 0x05, 0x9a, 0x07, 0x12, 0x80, 0xe2, 0xeb, 0x27, 0xb2, 0x75, 0x09, 0x83, 0x2c, 0x1a, 0x1b, 0x6e, 0x5a, 0xa0, 0x52, 0x3b, 0xd6, 0xb3, 0x29, 0xe3, 0x2f, 0x84, 0x53, 0xd1, 0x00, 0xed, 0x20, 0xfc, 0xb1, 0x5b, 0x6a, 0xcb, 0xbe, 0x39, 0x4a, 0x4c, 0x58, 0xcf, 0xd0, 0xef, 0xaa, 0xfb, 0x43, 0x4d, 0x33, 0x85, 0x45, 0xf9, 0x02, 0x7f, 0x50, 0x3c, 0x9f, 0xa8, 0x51, 0xa3, 0x40, 0x8f, 0x92, 0x9d, 0x38, 0xf5, 0xbc, 0xb6, 0xda, 0x21, 0x10, 0xff, 0xf3, 0xd2, 0xcd, 0x0c, 0x13, 0xec, 0x5f, 0x97, 0x44, 0x17, 0xc4, 0xa7, 0x7e, 0x3d, 0x64, 0x5d, 0x19, 0x73, 0x60, 0x81, 0x4f, 0xdc, 0x22, 0x2a, 0x90, 0x88, 0x46, 0xee, 0xb8, 0x14, 0xde, 0x5e, 0x0b, 0xdb, 0xe0, 0x32, 0x3a, 0x0a, 0x49, 0x06, 0x24, 0x5c, 0xc2, 0xd3, 0xac, 0x62, 0x91, 0x95, 0xe4, 0x79, 0xe7, 0xc8, 0x37, 0x6d, 0x8d, 0xd5, 0x4e, 0xa9, 0x6c, 0x56, 0xf4, 0xea, 0x65, 0x7a, 0xae, 0x08, 0xba, 0x78, 0x25, 0x2e, 0x1c, 0xa6, 0xb4, 0xc6, 0xe8, 0xdd, 0x74, 0x1f, 0x4b, 0xbd, 0x8b, 0x8a, 0x70, 0x3e, 0xb5, 0x66, 0x48, 0x03, 0xf6, 0x0e, 0x61, 0x35, 0x57, 0xb9, 0x86, 0xc1, 0x1d, 0x9e, 0xe1, 0xf8, 0x98, 0x11, 0x69, 0xd9, 0x8e, 0x94, 0x9b, 0x1e, 0x87, 0xe9, 0xce, 0x55, 0x28, 0xdf, 0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16]
+#% Expanded round keys: 11 rounds x 16 bytes (176 bytes)
+bytes RK = [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0xd6, 0xaa, 0x74, 0xfd, 0xd2, 0xaf, 0x72, 0xfa, 0xda, 0xa6, 0x78, 0xf1, 0xd6, 0xab, 0x76, 0xfe, 0xb6, 0x92, 0xcf, 0x0b, 0x64, 0x3d, 0xbd, 0xf1, 0xbe, 0x9b, 0xc5, 0x00, 0x68, 0x30, 0xb3, 0xfe, 0xb6, 0xff, 0x74, 0x4e, 0xd2, 0xc2, 0xc9, 0xbf, 0x6c, 0x59, 0x0c, 0xbf, 0x04, 0x69, 0xbf, 0x41, 0x47, 0xf7, 0xf7, 0xbc, 0x95, 0x35, 0x3e, 0x03, 0xf9, 0x6c, 0x32, 0xbc, 0xfd, 0x05, 0x8d, 0xfd, 0x3c, 0xaa, 0xa3, 0xe8, 0xa9, 0x9f, 0x9d, 0xeb, 0x50, 0xf3, 0xaf, 0x57, 0xad, 0xf6, 0x22, 0xaa, 0x5e, 0x39, 0x0f, 0x7d, 0xf7, 0xa6, 0x92, 0x96, 0xa7, 0x55, 0x3d, 0xc1, 0x0a, 0xa3, 0x1f, 0x6b, 0x14, 0xf9, 0x70, 0x1a, 0xe3, 0x5f, 0xe2, 0x8c, 0x44, 0x0a, 0xdf, 0x4d, 0x4e, 0xa9, 0xc0, 0x26, 0x47, 0x43, 0x87, 0x35, 0xa4, 0x1c, 0x65, 0xb9, 0xe0, 0x16, 0xba, 0xf4, 0xae, 0xbf, 0x7a, 0xd2, 0x54, 0x99, 0x32, 0xd1, 0xf0, 0x85, 0x57, 0x68, 0x10, 0x93, 0xed, 0x9c, 0xbe, 0x2c, 0x97, 0x4e, 0x13, 0x11, 0x1d, 0x7f, 0xe3, 0x94, 0x4a, 0x17, 0xf3, 0x07, 0xa7, 0x8b, 0x4d, 0x2b, 0x30, 0xc5]
+#% Plaintext block
+bytes PT = [0, 17, 34, 51, 68, 85, 102, 119, 136, 153, 170, 187, 204, 221, 238, 255]
+#% GF(2^8) multiply by 2 with the AES reduction polynomial
+function xt(v) = ((v << 1) & 255) ^ ((v >> 7) * 27)
+
+math_run bytes_get(PT, 0) = ?
+if up = (ok) goto (push ({s0} = {(in = up)}))
+math_run bytes_get(PT, 1) = ?
+if up = (ok) goto (push ({s1} = {(in = up)}))
+math_run bytes_get(PT, 2) = ?
+if up = (ok) goto (push ({s2} = {(in = up)}))
+math_run bytes_get(PT, 3) = ?
+if up = (ok) goto (push ({s3} = {(in = up)}))
+math_run bytes_get(PT, 4) = ?
+if up = (ok) goto (push ({s4} = {(in = up)}))
+math_run bytes_get(PT, 5) = ?
+if up = (ok) goto (push ({s5} = {(in = up)}))
+math_run bytes_get(PT, 6) = ?
+if up = (ok) goto (push ({s6} = {(in = up)}))
+math_run bytes_get(PT, 7) = ?
+if up = (ok) goto (push ({s7} = {(in = up)}))
+math_run bytes_get(PT, 8) = ?
+if up = (ok) goto (push ({s8} = {(in = up)}))
+math_run bytes_get(PT, 9) = ?
+if up = (ok) goto (push ({s9} = {(in = up)}))
+math_run bytes_get(PT, 10) = ?
+if up = (ok) goto (push ({s10} = {(in = up)}))
+math_run bytes_get(PT, 11) = ?
+if up = (ok) goto (push ({s11} = {(in = up)}))
+math_run bytes_get(PT, 12) = ?
+if up = (ok) goto (push ({s12} = {(in = up)}))
+math_run bytes_get(PT, 13) = ?
+if up = (ok) goto (push ({s13} = {(in = up)}))
+math_run bytes_get(PT, 14) = ?
+if up = (ok) goto (push ({s14} = {(in = up)}))
+math_run bytes_get(PT, 15) = ?
+if up = (ok) goto (push ({s15} = {(in = up)}))
+
+#% AddRoundKey with round key 0
+math_run {s0} ^ bytes_get(RK, 0) = ?
+if up = (ok) goto (push ({s0} = {(in = up)}))
+math_run {s1} ^ bytes_get(RK, 1) = ?
+if up = (ok) goto (push ({s1} = {(in = up)}))
+math_run {s2} ^ bytes_get(RK, 2) = ?
+if up = (ok) goto (push ({s2} = {(in = up)}))
+math_run {s3} ^ bytes_get(RK, 3) = ?
+if up = (ok) goto (push ({s3} = {(in = up)}))
+math_run {s4} ^ bytes_get(RK, 4) = ?
+if up = (ok) goto (push ({s4} = {(in = up)}))
+math_run {s5} ^ bytes_get(RK, 5) = ?
+if up = (ok) goto (push ({s5} = {(in = up)}))
+math_run {s6} ^ bytes_get(RK, 6) = ?
+if up = (ok) goto (push ({s6} = {(in = up)}))
+math_run {s7} ^ bytes_get(RK, 7) = ?
+if up = (ok) goto (push ({s7} = {(in = up)}))
+math_run {s8} ^ bytes_get(RK, 8) = ?
+if up = (ok) goto (push ({s8} = {(in = up)}))
+math_run {s9} ^ bytes_get(RK, 9) = ?
+if up = (ok) goto (push ({s9} = {(in = up)}))
+math_run {s10} ^ bytes_get(RK, 10) = ?
+if up = (ok) goto (push ({s10} = {(in = up)}))
+math_run {s11} ^ bytes_get(RK, 11) = ?
+if up = (ok) goto (push ({s11} = {(in = up)}))
+math_run {s12} ^ bytes_get(RK, 12) = ?
+if up = (ok) goto (push ({s12} = {(in = up)}))
+math_run {s13} ^ bytes_get(RK, 13) = ?
+if up = (ok) goto (push ({s13} = {(in = up)}))
+math_run {s14} ^ bytes_get(RK, 14) = ?
+if up = (ok) goto (push ({s14} = {(in = up)}))
+math_run {s15} ^ bytes_get(RK, 15) = ?
+if up = (ok) goto (push ({s15} = {(in = up)}))
+
+#% Round 1
+#% SubBytes + ShiftRows (state is column-major: s[column*4 + row])
+math_run bytes_get(SB, {s0}) = ?
+if up = (ok) goto (push ({t0} = {(in = up)}))
+math_run bytes_get(SB, {s5}) = ?
+if up = (ok) goto (push ({t1} = {(in = up)}))
+math_run bytes_get(SB, {s10}) = ?
+if up = (ok) goto (push ({t2} = {(in = up)}))
+math_run bytes_get(SB, {s15}) = ?
+if up = (ok) goto (push ({t3} = {(in = up)}))
+math_run bytes_get(SB, {s4}) = ?
+if up = (ok) goto (push ({t4} = {(in = up)}))
+math_run bytes_get(SB, {s9}) = ?
+if up = (ok) goto (push ({t5} = {(in = up)}))
+math_run bytes_get(SB, {s14}) = ?
+if up = (ok) goto (push ({t6} = {(in = up)}))
+math_run bytes_get(SB, {s3}) = ?
+if up = (ok) goto (push ({t7} = {(in = up)}))
+math_run bytes_get(SB, {s8}) = ?
+if up = (ok) goto (push ({t8} = {(in = up)}))
+math_run bytes_get(SB, {s13}) = ?
+if up = (ok) goto (push ({t9} = {(in = up)}))
+math_run bytes_get(SB, {s2}) = ?
+if up = (ok) goto (push ({t10} = {(in = up)}))
+math_run bytes_get(SB, {s7}) = ?
+if up = (ok) goto (push ({t11} = {(in = up)}))
+math_run bytes_get(SB, {s12}) = ?
+if up = (ok) goto (push ({t12} = {(in = up)}))
+math_run bytes_get(SB, {s1}) = ?
+if up = (ok) goto (push ({t13} = {(in = up)}))
+math_run bytes_get(SB, {s6}) = ?
+if up = (ok) goto (push ({t14} = {(in = up)}))
+math_run bytes_get(SB, {s11}) = ?
+if up = (ok) goto (push ({t15} = {(in = up)}))
+push ({s0} = {t0})
+push ({s1} = {t1})
+push ({s2} = {t2})
+push ({s3} = {t3})
+push ({s4} = {t4})
+push ({s5} = {t5})
+push ({s6} = {t6})
+push ({s7} = {t7})
+push ({s8} = {t8})
+push ({s9} = {t9})
+push ({s10} = {t10})
+push ({s11} = {t11})
+push ({s12} = {t12})
+push ({s13} = {t13})
+push ({s14} = {t14})
+push ({s15} = {t15})
+
+#% MixColumns
+math_run xt({s0}) ^ (xt({s1}) ^ {s1}) ^ {s2} ^ {s3} = ?
+if up = (ok) goto (push ({m0_0} = {(in = up)}))
+math_run {s0} ^ xt({s1}) ^ (xt({s2}) ^ {s2}) ^ {s3} = ?
+if up = (ok) goto (push ({m0_1} = {(in = up)}))
+math_run {s0} ^ {s1} ^ xt({s2}) ^ (xt({s3}) ^ {s3}) = ?
+if up = (ok) goto (push ({m0_2} = {(in = up)}))
+math_run (xt({s0}) ^ {s0}) ^ {s1} ^ {s2} ^ xt({s3}) = ?
+if up = (ok) goto (push ({m0_3} = {(in = up)}))
+push ({s0} = {m0_0})
+push ({s1} = {m0_1})
+push ({s2} = {m0_2})
+push ({s3} = {m0_3})
+math_run xt({s4}) ^ (xt({s5}) ^ {s5}) ^ {s6} ^ {s7} = ?
+if up = (ok) goto (push ({m1_0} = {(in = up)}))
+math_run {s4} ^ xt({s5}) ^ (xt({s6}) ^ {s6}) ^ {s7} = ?
+if up = (ok) goto (push ({m1_1} = {(in = up)}))
+math_run {s4} ^ {s5} ^ xt({s6}) ^ (xt({s7}) ^ {s7}) = ?
+if up = (ok) goto (push ({m1_2} = {(in = up)}))
+math_run (xt({s4}) ^ {s4}) ^ {s5} ^ {s6} ^ xt({s7}) = ?
+if up = (ok) goto (push ({m1_3} = {(in = up)}))
+push ({s4} = {m1_0})
+push ({s5} = {m1_1})
+push ({s6} = {m1_2})
+push ({s7} = {m1_3})
+math_run xt({s8}) ^ (xt({s9}) ^ {s9}) ^ {s10} ^ {s11} = ?
+if up = (ok) goto (push ({m2_0} = {(in = up)}))
+math_run {s8} ^ xt({s9}) ^ (xt({s10}) ^ {s10}) ^ {s11} = ?
+if up = (ok) goto (push ({m2_1} = {(in = up)}))
+math_run {s8} ^ {s9} ^ xt({s10}) ^ (xt({s11}) ^ {s11}) = ?
+if up = (ok) goto (push ({m2_2} = {(in = up)}))
+math_run (xt({s8}) ^ {s8}) ^ {s9} ^ {s10} ^ xt({s11}) = ?
+if up = (ok) goto (push ({m2_3} = {(in = up)}))
+push ({s8} = {m2_0})
+push ({s9} = {m2_1})
+push ({s10} = {m2_2})
+push ({s11} = {m2_3})
+math_run xt({s12}) ^ (xt({s13}) ^ {s13}) ^ {s14} ^ {s15} = ?
+if up = (ok) goto (push ({m3_0} = {(in = up)}))
+math_run {s12} ^ xt({s13}) ^ (xt({s14}) ^ {s14}) ^ {s15} = ?
+if up = (ok) goto (push ({m3_1} = {(in = up)}))
+math_run {s12} ^ {s13} ^ xt({s14}) ^ (xt({s15}) ^ {s15}) = ?
+if up = (ok) goto (push ({m3_2} = {(in = up)}))
+math_run (xt({s12}) ^ {s12}) ^ {s13} ^ {s14} ^ xt({s15}) = ?
+if up = (ok) goto (push ({m3_3} = {(in = up)}))
+push ({s12} = {m3_0})
+push ({s13} = {m3_1})
+push ({s14} = {m3_2})
+push ({s15} = {m3_3})
+
+#% AddRoundKey
+math_run {s0} ^ bytes_get(RK, 16) = ?
+if up = (ok) goto (push ({s0} = {(in = up)}))
+math_run {s1} ^ bytes_get(RK, 17) = ?
+if up = (ok) goto (push ({s1} = {(in = up)}))
+math_run {s2} ^ bytes_get(RK, 18) = ?
+if up = (ok) goto (push ({s2} = {(in = up)}))
+math_run {s3} ^ bytes_get(RK, 19) = ?
+if up = (ok) goto (push ({s3} = {(in = up)}))
+math_run {s4} ^ bytes_get(RK, 20) = ?
+if up = (ok) goto (push ({s4} = {(in = up)}))
+math_run {s5} ^ bytes_get(RK, 21) = ?
+if up = (ok) goto (push ({s5} = {(in = up)}))
+math_run {s6} ^ bytes_get(RK, 22) = ?
+if up = (ok) goto (push ({s6} = {(in = up)}))
+math_run {s7} ^ bytes_get(RK, 23) = ?
+if up = (ok) goto (push ({s7} = {(in = up)}))
+math_run {s8} ^ bytes_get(RK, 24) = ?
+if up = (ok) goto (push ({s8} = {(in = up)}))
+math_run {s9} ^ bytes_get(RK, 25) = ?
+if up = (ok) goto (push ({s9} = {(in = up)}))
+math_run {s10} ^ bytes_get(RK, 26) = ?
+if up = (ok) goto (push ({s10} = {(in = up)}))
+math_run {s11} ^ bytes_get(RK, 27) = ?
+if up = (ok) goto (push ({s11} = {(in = up)}))
+math_run {s12} ^ bytes_get(RK, 28) = ?
+if up = (ok) goto (push ({s12} = {(in = up)}))
+math_run {s13} ^ bytes_get(RK, 29) = ?
+if up = (ok) goto (push ({s13} = {(in = up)}))
+math_run {s14} ^ bytes_get(RK, 30) = ?
+if up = (ok) goto (push ({s14} = {(in = up)}))
+math_run {s15} ^ bytes_get(RK, 31) = ?
+if up = (ok) goto (push ({s15} = {(in = up)}))
+
+#% Round 2
+#% SubBytes + ShiftRows (state is column-major: s[column*4 + row])
+math_run bytes_get(SB, {s0}) = ?
+if up = (ok) goto (push ({t0} = {(in = up)}))
+math_run bytes_get(SB, {s5}) = ?
+if up = (ok) goto (push ({t1} = {(in = up)}))
+math_run bytes_get(SB, {s10}) = ?
+if up = (ok) goto (push ({t2} = {(in = up)}))
+math_run bytes_get(SB, {s15}) = ?
+if up = (ok) goto (push ({t3} = {(in = up)}))
+math_run bytes_get(SB, {s4}) = ?
+if up = (ok) goto (push ({t4} = {(in = up)}))
+math_run bytes_get(SB, {s9}) = ?
+if up = (ok) goto (push ({t5} = {(in = up)}))
+math_run bytes_get(SB, {s14}) = ?
+if up = (ok) goto (push ({t6} = {(in = up)}))
+math_run bytes_get(SB, {s3}) = ?
+if up = (ok) goto (push ({t7} = {(in = up)}))
+math_run bytes_get(SB, {s8}) = ?
+if up = (ok) goto (push ({t8} = {(in = up)}))
+math_run bytes_get(SB, {s13}) = ?
+if up = (ok) goto (push ({t9} = {(in = up)}))
+math_run bytes_get(SB, {s2}) = ?
+if up = (ok) goto (push ({t10} = {(in = up)}))
+math_run bytes_get(SB, {s7}) = ?
+if up = (ok) goto (push ({t11} = {(in = up)}))
+math_run bytes_get(SB, {s12}) = ?
+if up = (ok) goto (push ({t12} = {(in = up)}))
+math_run bytes_get(SB, {s1}) = ?
+if up = (ok) goto (push ({t13} = {(in = up)}))
+math_run bytes_get(SB, {s6}) = ?
+if up = (ok) goto (push ({t14} = {(in = up)}))
+math_run bytes_get(SB, {s11}) = ?
+if up = (ok) goto (push ({t15} = {(in = up)}))
+push ({s0} = {t0})
+push ({s1} = {t1})
+push ({s2} = {t2})
+push ({s3} = {t3})
+push ({s4} = {t4})
+push ({s5} = {t5})
+push ({s6} = {t6})
+push ({s7} = {t7})
+push ({s8} = {t8})
+push ({s9} = {t9})
+push ({s10} = {t10})
+push ({s11} = {t11})
+push ({s12} = {t12})
+push ({s13} = {t13})
+push ({s14} = {t14})
+push ({s15} = {t15})
+
+#% MixColumns
+math_run xt({s0}) ^ (xt({s1}) ^ {s1}) ^ {s2} ^ {s3} = ?
+if up = (ok) goto (push ({m0_0} = {(in = up)}))
+math_run {s0} ^ xt({s1}) ^ (xt({s2}) ^ {s2}) ^ {s3} = ?
+if up = (ok) goto (push ({m0_1} = {(in = up)}))
+math_run {s0} ^ {s1} ^ xt({s2}) ^ (xt({s3}) ^ {s3}) = ?
+if up = (ok) goto (push ({m0_2} = {(in = up)}))
+math_run (xt({s0}) ^ {s0}) ^ {s1} ^ {s2} ^ xt({s3}) = ?
+if up = (ok) goto (push ({m0_3} = {(in = up)}))
+push ({s0} = {m0_0})
+push ({s1} = {m0_1})
+push ({s2} = {m0_2})
+push ({s3} = {m0_3})
+math_run xt({s4}) ^ (xt({s5}) ^ {s5}) ^ {s6} ^ {s7} = ?
+if up = (ok) goto (push ({m1_0} = {(in = up)}))
+math_run {s4} ^ xt({s5}) ^ (xt({s6}) ^ {s6}) ^ {s7} = ?
+if up = (ok) goto (push ({m1_1} = {(in = up)}))
+math_run {s4} ^ {s5} ^ xt({s6}) ^ (xt({s7}) ^ {s7}) = ?
+if up = (ok) goto (push ({m1_2} = {(in = up)}))
+math_run (xt({s4}) ^ {s4}) ^ {s5} ^ {s6} ^ xt({s7}) = ?
+if up = (ok) goto (push ({m1_3} = {(in = up)}))
+push ({s4} = {m1_0})
+push ({s5} = {m1_1})
+push ({s6} = {m1_2})
+push ({s7} = {m1_3})
+math_run xt({s8}) ^ (xt({s9}) ^ {s9}) ^ {s10} ^ {s11} = ?
+if up = (ok) goto (push ({m2_0} = {(in = up)}))
+math_run {s8} ^ xt({s9}) ^ (xt({s10}) ^ {s10}) ^ {s11} = ?
+if up = (ok) goto (push ({m2_1} = {(in = up)}))
+math_run {s8} ^ {s9} ^ xt({s10}) ^ (xt({s11}) ^ {s11}) = ?
+if up = (ok) goto (push ({m2_2} = {(in = up)}))
+math_run (xt({s8}) ^ {s8}) ^ {s9} ^ {s10} ^ xt({s11}) = ?
+if up = (ok) goto (push ({m2_3} = {(in = up)}))
+push ({s8} = {m2_0})
+push ({s9} = {m2_1})
+push ({s10} = {m2_2})
+push ({s11} = {m2_3})
+math_run xt({s12}) ^ (xt({s13}) ^ {s13}) ^ {s14} ^ {s15} = ?
+if up = (ok) goto (push ({m3_0} = {(in = up)}))
+math_run {s12} ^ xt({s13}) ^ (xt({s14}) ^ {s14}) ^ {s15} = ?
+if up = (ok) goto (push ({m3_1} = {(in = up)}))
+math_run {s12} ^ {s13} ^ xt({s14}) ^ (xt({s15}) ^ {s15}) = ?
+if up = (ok) goto (push ({m3_2} = {(in = up)}))
+math_run (xt({s12}) ^ {s12}) ^ {s13} ^ {s14} ^ xt({s15}) = ?
+if up = (ok) goto (push ({m3_3} = {(in = up)}))
+push ({s12} = {m3_0})
+push ({s13} = {m3_1})
+push ({s14} = {m3_2})
+push ({s15} = {m3_3})
+
+#% AddRoundKey
+math_run {s0} ^ bytes_get(RK, 32) = ?
+if up = (ok) goto (push ({s0} = {(in = up)}))
+math_run {s1} ^ bytes_get(RK, 33) = ?
+if up = (ok) goto (push ({s1} = {(in = up)}))
+math_run {s2} ^ bytes_get(RK, 34) = ?
+if up = (ok) goto (push ({s2} = {(in = up)}))
+math_run {s3} ^ bytes_get(RK, 35) = ?
+if up = (ok) goto (push ({s3} = {(in = up)}))
+math_run {s4} ^ bytes_get(RK, 36) = ?
+if up = (ok) goto (push ({s4} = {(in = up)}))
+math_run {s5} ^ bytes_get(RK, 37) = ?
+if up = (ok) goto (push ({s5} = {(in = up)}))
+math_run {s6} ^ bytes_get(RK, 38) = ?
+if up = (ok) goto (push ({s6} = {(in = up)}))
+math_run {s7} ^ bytes_get(RK, 39) = ?
+if up = (ok) goto (push ({s7} = {(in = up)}))
+math_run {s8} ^ bytes_get(RK, 40) = ?
+if up = (ok) goto (push ({s8} = {(in = up)}))
+math_run {s9} ^ bytes_get(RK, 41) = ?
+if up = (ok) goto (push ({s9} = {(in = up)}))
+math_run {s10} ^ bytes_get(RK, 42) = ?
+if up = (ok) goto (push ({s10} = {(in = up)}))
+math_run {s11} ^ bytes_get(RK, 43) = ?
+if up = (ok) goto (push ({s11} = {(in = up)}))
+math_run {s12} ^ bytes_get(RK, 44) = ?
+if up = (ok) goto (push ({s12} = {(in = up)}))
+math_run {s13} ^ bytes_get(RK, 45) = ?
+if up = (ok) goto (push ({s13} = {(in = up)}))
+math_run {s14} ^ bytes_get(RK, 46) = ?
+if up = (ok) goto (push ({s14} = {(in = up)}))
+math_run {s15} ^ bytes_get(RK, 47) = ?
+if up = (ok) goto (push ({s15} = {(in = up)}))
+
+#% Round 3
+#% SubBytes + ShiftRows (state is column-major: s[column*4 + row])
+math_run bytes_get(SB, {s0}) = ?
+if up = (ok) goto (push ({t0} = {(in = up)}))
+math_run bytes_get(SB, {s5}) = ?
+if up = (ok) goto (push ({t1} = {(in = up)}))
+math_run bytes_get(SB, {s10}) = ?
+if up = (ok) goto (push ({t2} = {(in = up)}))
+math_run bytes_get(SB, {s15}) = ?
+if up = (ok) goto (push ({t3} = {(in = up)}))
+math_run bytes_get(SB, {s4}) = ?
+if up = (ok) goto (push ({t4} = {(in = up)}))
+math_run bytes_get(SB, {s9}) = ?
+if up = (ok) goto (push ({t5} = {(in = up)}))
+math_run bytes_get(SB, {s14}) = ?
+if up = (ok) goto (push ({t6} = {(in = up)}))
+math_run bytes_get(SB, {s3}) = ?
+if up = (ok) goto (push ({t7} = {(in = up)}))
+math_run bytes_get(SB, {s8}) = ?
+if up = (ok) goto (push ({t8} = {(in = up)}))
+math_run bytes_get(SB, {s13}) = ?
+if up = (ok) goto (push ({t9} = {(in = up)}))
+math_run bytes_get(SB, {s2}) = ?
+if up = (ok) goto (push ({t10} = {(in = up)}))
+math_run bytes_get(SB, {s7}) = ?
+if up = (ok) goto (push ({t11} = {(in = up)}))
+math_run bytes_get(SB, {s12}) = ?
+if up = (ok) goto (push ({t12} = {(in = up)}))
+math_run bytes_get(SB, {s1}) = ?
+if up = (ok) goto (push ({t13} = {(in = up)}))
+math_run bytes_get(SB, {s6}) = ?
+if up = (ok) goto (push ({t14} = {(in = up)}))
+math_run bytes_get(SB, {s11}) = ?
+if up = (ok) goto (push ({t15} = {(in = up)}))
+push ({s0} = {t0})
+push ({s1} = {t1})
+push ({s2} = {t2})
+push ({s3} = {t3})
+push ({s4} = {t4})
+push ({s5} = {t5})
+push ({s6} = {t6})
+push ({s7} = {t7})
+push ({s8} = {t8})
+push ({s9} = {t9})
+push ({s10} = {t10})
+push ({s11} = {t11})
+push ({s12} = {t12})
+push ({s13} = {t13})
+push ({s14} = {t14})
+push ({s15} = {t15})
+
+#% MixColumns
+math_run xt({s0}) ^ (xt({s1}) ^ {s1}) ^ {s2} ^ {s3} = ?
+if up = (ok) goto (push ({m0_0} = {(in = up)}))
+math_run {s0} ^ xt({s1}) ^ (xt({s2}) ^ {s2}) ^ {s3} = ?
+if up = (ok) goto (push ({m0_1} = {(in = up)}))
+math_run {s0} ^ {s1} ^ xt({s2}) ^ (xt({s3}) ^ {s3}) = ?
+if up = (ok) goto (push ({m0_2} = {(in = up)}))
+math_run (xt({s0}) ^ {s0}) ^ {s1} ^ {s2} ^ xt({s3}) = ?
+if up = (ok) goto (push ({m0_3} = {(in = up)}))
+push ({s0} = {m0_0})
+push ({s1} = {m0_1})
+push ({s2} = {m0_2})
+push ({s3} = {m0_3})
+math_run xt({s4}) ^ (xt({s5}) ^ {s5}) ^ {s6} ^ {s7} = ?
+if up = (ok) goto (push ({m1_0} = {(in = up)}))
+math_run {s4} ^ xt({s5}) ^ (xt({s6}) ^ {s6}) ^ {s7} = ?
+if up = (ok) goto (push ({m1_1} = {(in = up)}))
+math_run {s4} ^ {s5} ^ xt({s6}) ^ (xt({s7}) ^ {s7}) = ?
+if up = (ok) goto (push ({m1_2} = {(in = up)}))
+math_run (xt({s4}) ^ {s4}) ^ {s5} ^ {s6} ^ xt({s7}) = ?
+if up = (ok) goto (push ({m1_3} = {(in = up)}))
+push ({s4} = {m1_0})
+push ({s5} = {m1_1})
+push ({s6} = {m1_2})
+push ({s7} = {m1_3})
+math_run xt({s8}) ^ (xt({s9}) ^ {s9}) ^ {s10} ^ {s11} = ?
+if up = (ok) goto (push ({m2_0} = {(in = up)}))
+math_run {s8} ^ xt({s9}) ^ (xt({s10}) ^ {s10}) ^ {s11} = ?
+if up = (ok) goto (push ({m2_1} = {(in = up)}))
+math_run {s8} ^ {s9} ^ xt({s10}) ^ (xt({s11}) ^ {s11}) = ?
+if up = (ok) goto (push ({m2_2} = {(in = up)}))
+math_run (xt({s8}) ^ {s8}) ^ {s9} ^ {s10} ^ xt({s11}) = ?
+if up = (ok) goto (push ({m2_3} = {(in = up)}))
+push ({s8} = {m2_0})
+push ({s9} = {m2_1})
+push ({s10} = {m2_2})
+push ({s11} = {m2_3})
+math_run xt({s12}) ^ (xt({s13}) ^ {s13}) ^ {s14} ^ {s15} = ?
+if up = (ok) goto (push ({m3_0} = {(in = up)}))
+math_run {s12} ^ xt({s13}) ^ (xt({s14}) ^ {s14}) ^ {s15} = ?
+if up = (ok) goto (push ({m3_1} = {(in = up)}))
+math_run {s12} ^ {s13} ^ xt({s14}) ^ (xt({s15}) ^ {s15}) = ?
+if up = (ok) goto (push ({m3_2} = {(in = up)}))
+math_run (xt({s12}) ^ {s12}) ^ {s13} ^ {s14} ^ xt({s15}) = ?
+if up = (ok) goto (push ({m3_3} = {(in = up)}))
+push ({s12} = {m3_0})
+push ({s13} = {m3_1})
+push ({s14} = {m3_2})
+push ({s15} = {m3_3})
+
+#% AddRoundKey
+math_run {s0} ^ bytes_get(RK, 48) = ?
+if up = (ok) goto (push ({s0} = {(in = up)}))
+math_run {s1} ^ bytes_get(RK, 49) = ?
+if up = (ok) goto (push ({s1} = {(in = up)}))
+math_run {s2} ^ bytes_get(RK, 50) = ?
+if up = (ok) goto (push ({s2} = {(in = up)}))
+math_run {s3} ^ bytes_get(RK, 51) = ?
+if up = (ok) goto (push ({s3} = {(in = up)}))
+math_run {s4} ^ bytes_get(RK, 52) = ?
+if up = (ok) goto (push ({s4} = {(in = up)}))
+math_run {s5} ^ bytes_get(RK, 53) = ?
+if up = (ok) goto (push ({s5} = {(in = up)}))
+math_run {s6} ^ bytes_get(RK, 54) = ?
+if up = (ok) goto (push ({s6} = {(in = up)}))
+math_run {s7} ^ bytes_get(RK, 55) = ?
+if up = (ok) goto (push ({s7} = {(in = up)}))
+math_run {s8} ^ bytes_get(RK, 56) = ?
+if up = (ok) goto (push ({s8} = {(in = up)}))
+math_run {s9} ^ bytes_get(RK, 57) = ?
+if up = (ok) goto (push ({s9} = {(in = up)}))
+math_run {s10} ^ bytes_get(RK, 58) = ?
+if up = (ok) goto (push ({s10} = {(in = up)}))
+math_run {s11} ^ bytes_get(RK, 59) = ?
+if up = (ok) goto (push ({s11} = {(in = up)}))
+math_run {s12} ^ bytes_get(RK, 60) = ?
+if up = (ok) goto (push ({s12} = {(in = up)}))
+math_run {s13} ^ bytes_get(RK, 61) = ?
+if up = (ok) goto (push ({s13} = {(in = up)}))
+math_run {s14} ^ bytes_get(RK, 62) = ?
+if up = (ok) goto (push ({s14} = {(in = up)}))
+math_run {s15} ^ bytes_get(RK, 63) = ?
+if up = (ok) goto (push ({s15} = {(in = up)}))
+
+#% Round 4
+#% SubBytes + ShiftRows (state is column-major: s[column*4 + row])
+math_run bytes_get(SB, {s0}) = ?
+if up = (ok) goto (push ({t0} = {(in = up)}))
+math_run bytes_get(SB, {s5}) = ?
+if up = (ok) goto (push ({t1} = {(in = up)}))
+math_run bytes_get(SB, {s10}) = ?
+if up = (ok) goto (push ({t2} = {(in = up)}))
+math_run bytes_get(SB, {s15}) = ?
+if up = (ok) goto (push ({t3} = {(in = up)}))
+math_run bytes_get(SB, {s4}) = ?
+if up = (ok) goto (push ({t4} = {(in = up)}))
+math_run bytes_get(SB, {s9}) = ?
+if up = (ok) goto (push ({t5} = {(in = up)}))
+math_run bytes_get(SB, {s14}) = ?
+if up = (ok) goto (push ({t6} = {(in = up)}))
+math_run bytes_get(SB, {s3}) = ?
+if up = (ok) goto (push ({t7} = {(in = up)}))
+math_run bytes_get(SB, {s8}) = ?
+if up = (ok) goto (push ({t8} = {(in = up)}))
+math_run bytes_get(SB, {s13}) = ?
+if up = (ok) goto (push ({t9} = {(in = up)}))
+math_run bytes_get(SB, {s2}) = ?
+if up = (ok) goto (push ({t10} = {(in = up)}))
+math_run bytes_get(SB, {s7}) = ?
+if up = (ok) goto (push ({t11} = {(in = up)}))
+math_run bytes_get(SB, {s12}) = ?
+if up = (ok) goto (push ({t12} = {(in = up)}))
+math_run bytes_get(SB, {s1}) = ?
+if up = (ok) goto (push ({t13} = {(in = up)}))
+math_run bytes_get(SB, {s6}) = ?
+if up = (ok) goto (push ({t14} = {(in = up)}))
+math_run bytes_get(SB, {s11}) = ?
+if up = (ok) goto (push ({t15} = {(in = up)}))
+push ({s0} = {t0})
+push ({s1} = {t1})
+push ({s2} = {t2})
+push ({s3} = {t3})
+push ({s4} = {t4})
+push ({s5} = {t5})
+push ({s6} = {t6})
+push ({s7} = {t7})
+push ({s8} = {t8})
+push ({s9} = {t9})
+push ({s10} = {t10})
+push ({s11} = {t11})
+push ({s12} = {t12})
+push ({s13} = {t13})
+push ({s14} = {t14})
+push ({s15} = {t15})
+
+#% MixColumns
+math_run xt({s0}) ^ (xt({s1}) ^ {s1}) ^ {s2} ^ {s3} = ?
+if up = (ok) goto (push ({m0_0} = {(in = up)}))
+math_run {s0} ^ xt({s1}) ^ (xt({s2}) ^ {s2}) ^ {s3} = ?
+if up = (ok) goto (push ({m0_1} = {(in = up)}))
+math_run {s0} ^ {s1} ^ xt({s2}) ^ (xt({s3}) ^ {s3}) = ?
+if up = (ok) goto (push ({m0_2} = {(in = up)}))
+math_run (xt({s0}) ^ {s0}) ^ {s1} ^ {s2} ^ xt({s3}) = ?
+if up = (ok) goto (push ({m0_3} = {(in = up)}))
+push ({s0} = {m0_0})
+push ({s1} = {m0_1})
+push ({s2} = {m0_2})
+push ({s3} = {m0_3})
+math_run xt({s4}) ^ (xt({s5}) ^ {s5}) ^ {s6} ^ {s7} = ?
+if up = (ok) goto (push ({m1_0} = {(in = up)}))
+math_run {s4} ^ xt({s5}) ^ (xt({s6}) ^ {s6}) ^ {s7} = ?
+if up = (ok) goto (push ({m1_1} = {(in = up)}))
+math_run {s4} ^ {s5} ^ xt({s6}) ^ (xt({s7}) ^ {s7}) = ?
+if up = (ok) goto (push ({m1_2} = {(in = up)}))
+math_run (xt({s4}) ^ {s4}) ^ {s5} ^ {s6} ^ xt({s7}) = ?
+if up = (ok) goto (push ({m1_3} = {(in = up)}))
+push ({s4} = {m1_0})
+push ({s5} = {m1_1})
+push ({s6} = {m1_2})
+push ({s7} = {m1_3})
+math_run xt({s8}) ^ (xt({s9}) ^ {s9}) ^ {s10} ^ {s11} = ?
+if up = (ok) goto (push ({m2_0} = {(in = up)}))
+math_run {s8} ^ xt({s9}) ^ (xt({s10}) ^ {s10}) ^ {s11} = ?
+if up = (ok) goto (push ({m2_1} = {(in = up)}))
+math_run {s8} ^ {s9} ^ xt({s10}) ^ (xt({s11}) ^ {s11}) = ?
+if up = (ok) goto (push ({m2_2} = {(in = up)}))
+math_run (xt({s8}) ^ {s8}) ^ {s9} ^ {s10} ^ xt({s11}) = ?
+if up = (ok) goto (push ({m2_3} = {(in = up)}))
+push ({s8} = {m2_0})
+push ({s9} = {m2_1})
+push ({s10} = {m2_2})
+push ({s11} = {m2_3})
+math_run xt({s12}) ^ (xt({s13}) ^ {s13}) ^ {s14} ^ {s15} = ?
+if up = (ok) goto (push ({m3_0} = {(in = up)}))
+math_run {s12} ^ xt({s13}) ^ (xt({s14}) ^ {s14}) ^ {s15} = ?
+if up = (ok) goto (push ({m3_1} = {(in = up)}))
+math_run {s12} ^ {s13} ^ xt({s14}) ^ (xt({s15}) ^ {s15}) = ?
+if up = (ok) goto (push ({m3_2} = {(in = up)}))
+math_run (xt({s12}) ^ {s12}) ^ {s13} ^ {s14} ^ xt({s15}) = ?
+if up = (ok) goto (push ({m3_3} = {(in = up)}))
+push ({s12} = {m3_0})
+push ({s13} = {m3_1})
+push ({s14} = {m3_2})
+push ({s15} = {m3_3})
+
+#% AddRoundKey
+math_run {s0} ^ bytes_get(RK, 64) = ?
+if up = (ok) goto (push ({s0} = {(in = up)}))
+math_run {s1} ^ bytes_get(RK, 65) = ?
+if up = (ok) goto (push ({s1} = {(in = up)}))
+math_run {s2} ^ bytes_get(RK, 66) = ?
+if up = (ok) goto (push ({s2} = {(in = up)}))
+math_run {s3} ^ bytes_get(RK, 67) = ?
+if up = (ok) goto (push ({s3} = {(in = up)}))
+math_run {s4} ^ bytes_get(RK, 68) = ?
+if up = (ok) goto (push ({s4} = {(in = up)}))
+math_run {s5} ^ bytes_get(RK, 69) = ?
+if up = (ok) goto (push ({s5} = {(in = up)}))
+math_run {s6} ^ bytes_get(RK, 70) = ?
+if up = (ok) goto (push ({s6} = {(in = up)}))
+math_run {s7} ^ bytes_get(RK, 71) = ?
+if up = (ok) goto (push ({s7} = {(in = up)}))
+math_run {s8} ^ bytes_get(RK, 72) = ?
+if up = (ok) goto (push ({s8} = {(in = up)}))
+math_run {s9} ^ bytes_get(RK, 73) = ?
+if up = (ok) goto (push ({s9} = {(in = up)}))
+math_run {s10} ^ bytes_get(RK, 74) = ?
+if up = (ok) goto (push ({s10} = {(in = up)}))
+math_run {s11} ^ bytes_get(RK, 75) = ?
+if up = (ok) goto (push ({s11} = {(in = up)}))
+math_run {s12} ^ bytes_get(RK, 76) = ?
+if up = (ok) goto (push ({s12} = {(in = up)}))
+math_run {s13} ^ bytes_get(RK, 77) = ?
+if up = (ok) goto (push ({s13} = {(in = up)}))
+math_run {s14} ^ bytes_get(RK, 78) = ?
+if up = (ok) goto (push ({s14} = {(in = up)}))
+math_run {s15} ^ bytes_get(RK, 79) = ?
+if up = (ok) goto (push ({s15} = {(in = up)}))
+
+#% Round 5
+#% SubBytes + ShiftRows (state is column-major: s[column*4 + row])
+math_run bytes_get(SB, {s0}) = ?
+if up = (ok) goto (push ({t0} = {(in = up)}))
+math_run bytes_get(SB, {s5}) = ?
+if up = (ok) goto (push ({t1} = {(in = up)}))
+math_run bytes_get(SB, {s10}) = ?
+if up = (ok) goto (push ({t2} = {(in = up)}))
+math_run bytes_get(SB, {s15}) = ?
+if up = (ok) goto (push ({t3} = {(in = up)}))
+math_run bytes_get(SB, {s4}) = ?
+if up = (ok) goto (push ({t4} = {(in = up)}))
+math_run bytes_get(SB, {s9}) = ?
+if up = (ok) goto (push ({t5} = {(in = up)}))
+math_run bytes_get(SB, {s14}) = ?
+if up = (ok) goto (push ({t6} = {(in = up)}))
+math_run bytes_get(SB, {s3}) = ?
+if up = (ok) goto (push ({t7} = {(in = up)}))
+math_run bytes_get(SB, {s8}) = ?
+if up = (ok) goto (push ({t8} = {(in = up)}))
+math_run bytes_get(SB, {s13}) = ?
+if up = (ok) goto (push ({t9} = {(in = up)}))
+math_run bytes_get(SB, {s2}) = ?
+if up = (ok) goto (push ({t10} = {(in = up)}))
+math_run bytes_get(SB, {s7}) = ?
+if up = (ok) goto (push ({t11} = {(in = up)}))
+math_run bytes_get(SB, {s12}) = ?
+if up = (ok) goto (push ({t12} = {(in = up)}))
+math_run bytes_get(SB, {s1}) = ?
+if up = (ok) goto (push ({t13} = {(in = up)}))
+math_run bytes_get(SB, {s6}) = ?
+if up = (ok) goto (push ({t14} = {(in = up)}))
+math_run bytes_get(SB, {s11}) = ?
+if up = (ok) goto (push ({t15} = {(in = up)}))
+push ({s0} = {t0})
+push ({s1} = {t1})
+push ({s2} = {t2})
+push ({s3} = {t3})
+push ({s4} = {t4})
+push ({s5} = {t5})
+push ({s6} = {t6})
+push ({s7} = {t7})
+push ({s8} = {t8})
+push ({s9} = {t9})
+push ({s10} = {t10})
+push ({s11} = {t11})
+push ({s12} = {t12})
+push ({s13} = {t13})
+push ({s14} = {t14})
+push ({s15} = {t15})
+
+#% MixColumns
+math_run xt({s0}) ^ (xt({s1}) ^ {s1}) ^ {s2} ^ {s3} = ?
+if up = (ok) goto (push ({m0_0} = {(in = up)}))
+math_run {s0} ^ xt({s1}) ^ (xt({s2}) ^ {s2}) ^ {s3} = ?
+if up = (ok) goto (push ({m0_1} = {(in = up)}))
+math_run {s0} ^ {s1} ^ xt({s2}) ^ (xt({s3}) ^ {s3}) = ?
+if up = (ok) goto (push ({m0_2} = {(in = up)}))
+math_run (xt({s0}) ^ {s0}) ^ {s1} ^ {s2} ^ xt({s3}) = ?
+if up = (ok) goto (push ({m0_3} = {(in = up)}))
+push ({s0} = {m0_0})
+push ({s1} = {m0_1})
+push ({s2} = {m0_2})
+push ({s3} = {m0_3})
+math_run xt({s4}) ^ (xt({s5}) ^ {s5}) ^ {s6} ^ {s7} = ?
+if up = (ok) goto (push ({m1_0} = {(in = up)}))
+math_run {s4} ^ xt({s5}) ^ (xt({s6}) ^ {s6}) ^ {s7} = ?
+if up = (ok) goto (push ({m1_1} = {(in = up)}))
+math_run {s4} ^ {s5} ^ xt({s6}) ^ (xt({s7}) ^ {s7}) = ?
+if up = (ok) goto (push ({m1_2} = {(in = up)}))
+math_run (xt({s4}) ^ {s4}) ^ {s5} ^ {s6} ^ xt({s7}) = ?
+if up = (ok) goto (push ({m1_3} = {(in = up)}))
+push ({s4} = {m1_0})
+push ({s5} = {m1_1})
+push ({s6} = {m1_2})
+push ({s7} = {m1_3})
+math_run xt({s8}) ^ (xt({s9}) ^ {s9}) ^ {s10} ^ {s11} = ?
+if up = (ok) goto (push ({m2_0} = {(in = up)}))
+math_run {s8} ^ xt({s9}) ^ (xt({s10}) ^ {s10}) ^ {s11} = ?
+if up = (ok) goto (push ({m2_1} = {(in = up)}))
+math_run {s8} ^ {s9} ^ xt({s10}) ^ (xt({s11}) ^ {s11}) = ?
+if up = (ok) goto (push ({m2_2} = {(in = up)}))
+math_run (xt({s8}) ^ {s8}) ^ {s9} ^ {s10} ^ xt({s11}) = ?
+if up = (ok) goto (push ({m2_3} = {(in = up)}))
+push ({s8} = {m2_0})
+push ({s9} = {m2_1})
+push ({s10} = {m2_2})
+push ({s11} = {m2_3})
+math_run xt({s12}) ^ (xt({s13}) ^ {s13}) ^ {s14} ^ {s15} = ?
+if up = (ok) goto (push ({m3_0} = {(in = up)}))
+math_run {s12} ^ xt({s13}) ^ (xt({s14}) ^ {s14}) ^ {s15} = ?
+if up = (ok) goto (push ({m3_1} = {(in = up)}))
+math_run {s12} ^ {s13} ^ xt({s14}) ^ (xt({s15}) ^ {s15}) = ?
+if up = (ok) goto (push ({m3_2} = {(in = up)}))
+math_run (xt({s12}) ^ {s12}) ^ {s13} ^ {s14} ^ xt({s15}) = ?
+if up = (ok) goto (push ({m3_3} = {(in = up)}))
+push ({s12} = {m3_0})
+push ({s13} = {m3_1})
+push ({s14} = {m3_2})
+push ({s15} = {m3_3})
+
+#% AddRoundKey
+math_run {s0} ^ bytes_get(RK, 80) = ?
+if up = (ok) goto (push ({s0} = {(in = up)}))
+math_run {s1} ^ bytes_get(RK, 81) = ?
+if up = (ok) goto (push ({s1} = {(in = up)}))
+math_run {s2} ^ bytes_get(RK, 82) = ?
+if up = (ok) goto (push ({s2} = {(in = up)}))
+math_run {s3} ^ bytes_get(RK, 83) = ?
+if up = (ok) goto (push ({s3} = {(in = up)}))
+math_run {s4} ^ bytes_get(RK, 84) = ?
+if up = (ok) goto (push ({s4} = {(in = up)}))
+math_run {s5} ^ bytes_get(RK, 85) = ?
+if up = (ok) goto (push ({s5} = {(in = up)}))
+math_run {s6} ^ bytes_get(RK, 86) = ?
+if up = (ok) goto (push ({s6} = {(in = up)}))
+math_run {s7} ^ bytes_get(RK, 87) = ?
+if up = (ok) goto (push ({s7} = {(in = up)}))
+math_run {s8} ^ bytes_get(RK, 88) = ?
+if up = (ok) goto (push ({s8} = {(in = up)}))
+math_run {s9} ^ bytes_get(RK, 89) = ?
+if up = (ok) goto (push ({s9} = {(in = up)}))
+math_run {s10} ^ bytes_get(RK, 90) = ?
+if up = (ok) goto (push ({s10} = {(in = up)}))
+math_run {s11} ^ bytes_get(RK, 91) = ?
+if up = (ok) goto (push ({s11} = {(in = up)}))
+math_run {s12} ^ bytes_get(RK, 92) = ?
+if up = (ok) goto (push ({s12} = {(in = up)}))
+math_run {s13} ^ bytes_get(RK, 93) = ?
+if up = (ok) goto (push ({s13} = {(in = up)}))
+math_run {s14} ^ bytes_get(RK, 94) = ?
+if up = (ok) goto (push ({s14} = {(in = up)}))
+math_run {s15} ^ bytes_get(RK, 95) = ?
+if up = (ok) goto (push ({s15} = {(in = up)}))
+
+#% Round 6
+#% SubBytes + ShiftRows (state is column-major: s[column*4 + row])
+math_run bytes_get(SB, {s0}) = ?
+if up = (ok) goto (push ({t0} = {(in = up)}))
+math_run bytes_get(SB, {s5}) = ?
+if up = (ok) goto (push ({t1} = {(in = up)}))
+math_run bytes_get(SB, {s10}) = ?
+if up = (ok) goto (push ({t2} = {(in = up)}))
+math_run bytes_get(SB, {s15}) = ?
+if up = (ok) goto (push ({t3} = {(in = up)}))
+math_run bytes_get(SB, {s4}) = ?
+if up = (ok) goto (push ({t4} = {(in = up)}))
+math_run bytes_get(SB, {s9}) = ?
+if up = (ok) goto (push ({t5} = {(in = up)}))
+math_run bytes_get(SB, {s14}) = ?
+if up = (ok) goto (push ({t6} = {(in = up)}))
+math_run bytes_get(SB, {s3}) = ?
+if up = (ok) goto (push ({t7} = {(in = up)}))
+math_run bytes_get(SB, {s8}) = ?
+if up = (ok) goto (push ({t8} = {(in = up)}))
+math_run bytes_get(SB, {s13}) = ?
+if up = (ok) goto (push ({t9} = {(in = up)}))
+math_run bytes_get(SB, {s2}) = ?
+if up = (ok) goto (push ({t10} = {(in = up)}))
+math_run bytes_get(SB, {s7}) = ?
+if up = (ok) goto (push ({t11} = {(in = up)}))
+math_run bytes_get(SB, {s12}) = ?
+if up = (ok) goto (push ({t12} = {(in = up)}))
+math_run bytes_get(SB, {s1}) = ?
+if up = (ok) goto (push ({t13} = {(in = up)}))
+math_run bytes_get(SB, {s6}) = ?
+if up = (ok) goto (push ({t14} = {(in = up)}))
+math_run bytes_get(SB, {s11}) = ?
+if up = (ok) goto (push ({t15} = {(in = up)}))
+push ({s0} = {t0})
+push ({s1} = {t1})
+push ({s2} = {t2})
+push ({s3} = {t3})
+push ({s4} = {t4})
+push ({s5} = {t5})
+push ({s6} = {t6})
+push ({s7} = {t7})
+push ({s8} = {t8})
+push ({s9} = {t9})
+push ({s10} = {t10})
+push ({s11} = {t11})
+push ({s12} = {t12})
+push ({s13} = {t13})
+push ({s14} = {t14})
+push ({s15} = {t15})
+
+#% MixColumns
+math_run xt({s0}) ^ (xt({s1}) ^ {s1}) ^ {s2} ^ {s3} = ?
+if up = (ok) goto (push ({m0_0} = {(in = up)}))
+math_run {s0} ^ xt({s1}) ^ (xt({s2}) ^ {s2}) ^ {s3} = ?
+if up = (ok) goto (push ({m0_1} = {(in = up)}))
+math_run {s0} ^ {s1} ^ xt({s2}) ^ (xt({s3}) ^ {s3}) = ?
+if up = (ok) goto (push ({m0_2} = {(in = up)}))
+math_run (xt({s0}) ^ {s0}) ^ {s1} ^ {s2} ^ xt({s3}) = ?
+if up = (ok) goto (push ({m0_3} = {(in = up)}))
+push ({s0} = {m0_0})
+push ({s1} = {m0_1})
+push ({s2} = {m0_2})
+push ({s3} = {m0_3})
+math_run xt({s4}) ^ (xt({s5}) ^ {s5}) ^ {s6} ^ {s7} = ?
+if up = (ok) goto (push ({m1_0} = {(in = up)}))
+math_run {s4} ^ xt({s5}) ^ (xt({s6}) ^ {s6}) ^ {s7} = ?
+if up = (ok) goto (push ({m1_1} = {(in = up)}))
+math_run {s4} ^ {s5} ^ xt({s6}) ^ (xt({s7}) ^ {s7}) = ?
+if up = (ok) goto (push ({m1_2} = {(in = up)}))
+math_run (xt({s4}) ^ {s4}) ^ {s5} ^ {s6} ^ xt({s7}) = ?
+if up = (ok) goto (push ({m1_3} = {(in = up)}))
+push ({s4} = {m1_0})
+push ({s5} = {m1_1})
+push ({s6} = {m1_2})
+push ({s7} = {m1_3})
+math_run xt({s8}) ^ (xt({s9}) ^ {s9}) ^ {s10} ^ {s11} = ?
+if up = (ok) goto (push ({m2_0} = {(in = up)}))
+math_run {s8} ^ xt({s9}) ^ (xt({s10}) ^ {s10}) ^ {s11} = ?
+if up = (ok) goto (push ({m2_1} = {(in = up)}))
+math_run {s8} ^ {s9} ^ xt({s10}) ^ (xt({s11}) ^ {s11}) = ?
+if up = (ok) goto (push ({m2_2} = {(in = up)}))
+math_run (xt({s8}) ^ {s8}) ^ {s9} ^ {s10} ^ xt({s11}) = ?
+if up = (ok) goto (push ({m2_3} = {(in = up)}))
+push ({s8} = {m2_0})
+push ({s9} = {m2_1})
+push ({s10} = {m2_2})
+push ({s11} = {m2_3})
+math_run xt({s12}) ^ (xt({s13}) ^ {s13}) ^ {s14} ^ {s15} = ?
+if up = (ok) goto (push ({m3_0} = {(in = up)}))
+math_run {s12} ^ xt({s13}) ^ (xt({s14}) ^ {s14}) ^ {s15} = ?
+if up = (ok) goto (push ({m3_1} = {(in = up)}))
+math_run {s12} ^ {s13} ^ xt({s14}) ^ (xt({s15}) ^ {s15}) = ?
+if up = (ok) goto (push ({m3_2} = {(in = up)}))
+math_run (xt({s12}) ^ {s12}) ^ {s13} ^ {s14} ^ xt({s15}) = ?
+if up = (ok) goto (push ({m3_3} = {(in = up)}))
+push ({s12} = {m3_0})
+push ({s13} = {m3_1})
+push ({s14} = {m3_2})
+push ({s15} = {m3_3})
+
+#% AddRoundKey
+math_run {s0} ^ bytes_get(RK, 96) = ?
+if up = (ok) goto (push ({s0} = {(in = up)}))
+math_run {s1} ^ bytes_get(RK, 97) = ?
+if up = (ok) goto (push ({s1} = {(in = up)}))
+math_run {s2} ^ bytes_get(RK, 98) = ?
+if up = (ok) goto (push ({s2} = {(in = up)}))
+math_run {s3} ^ bytes_get(RK, 99) = ?
+if up = (ok) goto (push ({s3} = {(in = up)}))
+math_run {s4} ^ bytes_get(RK, 100) = ?
+if up = (ok) goto (push ({s4} = {(in = up)}))
+math_run {s5} ^ bytes_get(RK, 101) = ?
+if up = (ok) goto (push ({s5} = {(in = up)}))
+math_run {s6} ^ bytes_get(RK, 102) = ?
+if up = (ok) goto (push ({s6} = {(in = up)}))
+math_run {s7} ^ bytes_get(RK, 103) = ?
+if up = (ok) goto (push ({s7} = {(in = up)}))
+math_run {s8} ^ bytes_get(RK, 104) = ?
+if up = (ok) goto (push ({s8} = {(in = up)}))
+math_run {s9} ^ bytes_get(RK, 105) = ?
+if up = (ok) goto (push ({s9} = {(in = up)}))
+math_run {s10} ^ bytes_get(RK, 106) = ?
+if up = (ok) goto (push ({s10} = {(in = up)}))
+math_run {s11} ^ bytes_get(RK, 107) = ?
+if up = (ok) goto (push ({s11} = {(in = up)}))
+math_run {s12} ^ bytes_get(RK, 108) = ?
+if up = (ok) goto (push ({s12} = {(in = up)}))
+math_run {s13} ^ bytes_get(RK, 109) = ?
+if up = (ok) goto (push ({s13} = {(in = up)}))
+math_run {s14} ^ bytes_get(RK, 110) = ?
+if up = (ok) goto (push ({s14} = {(in = up)}))
+math_run {s15} ^ bytes_get(RK, 111) = ?
+if up = (ok) goto (push ({s15} = {(in = up)}))
+
+#% Round 7
+#% SubBytes + ShiftRows (state is column-major: s[column*4 + row])
+math_run bytes_get(SB, {s0}) = ?
+if up = (ok) goto (push ({t0} = {(in = up)}))
+math_run bytes_get(SB, {s5}) = ?
+if up = (ok) goto (push ({t1} = {(in = up)}))
+math_run bytes_get(SB, {s10}) = ?
+if up = (ok) goto (push ({t2} = {(in = up)}))
+math_run bytes_get(SB, {s15}) = ?
+if up = (ok) goto (push ({t3} = {(in = up)}))
+math_run bytes_get(SB, {s4}) = ?
+if up = (ok) goto (push ({t4} = {(in = up)}))
+math_run bytes_get(SB, {s9}) = ?
+if up = (ok) goto (push ({t5} = {(in = up)}))
+math_run bytes_get(SB, {s14}) = ?
+if up = (ok) goto (push ({t6} = {(in = up)}))
+math_run bytes_get(SB, {s3}) = ?
+if up = (ok) goto (push ({t7} = {(in = up)}))
+math_run bytes_get(SB, {s8}) = ?
+if up = (ok) goto (push ({t8} = {(in = up)}))
+math_run bytes_get(SB, {s13}) = ?
+if up = (ok) goto (push ({t9} = {(in = up)}))
+math_run bytes_get(SB, {s2}) = ?
+if up = (ok) goto (push ({t10} = {(in = up)}))
+math_run bytes_get(SB, {s7}) = ?
+if up = (ok) goto (push ({t11} = {(in = up)}))
+math_run bytes_get(SB, {s12}) = ?
+if up = (ok) goto (push ({t12} = {(in = up)}))
+math_run bytes_get(SB, {s1}) = ?
+if up = (ok) goto (push ({t13} = {(in = up)}))
+math_run bytes_get(SB, {s6}) = ?
+if up = (ok) goto (push ({t14} = {(in = up)}))
+math_run bytes_get(SB, {s11}) = ?
+if up = (ok) goto (push ({t15} = {(in = up)}))
+push ({s0} = {t0})
+push ({s1} = {t1})
+push ({s2} = {t2})
+push ({s3} = {t3})
+push ({s4} = {t4})
+push ({s5} = {t5})
+push ({s6} = {t6})
+push ({s7} = {t7})
+push ({s8} = {t8})
+push ({s9} = {t9})
+push ({s10} = {t10})
+push ({s11} = {t11})
+push ({s12} = {t12})
+push ({s13} = {t13})
+push ({s14} = {t14})
+push ({s15} = {t15})
+
+#% MixColumns
+math_run xt({s0}) ^ (xt({s1}) ^ {s1}) ^ {s2} ^ {s3} = ?
+if up = (ok) goto (push ({m0_0} = {(in = up)}))
+math_run {s0} ^ xt({s1}) ^ (xt({s2}) ^ {s2}) ^ {s3} = ?
+if up = (ok) goto (push ({m0_1} = {(in = up)}))
+math_run {s0} ^ {s1} ^ xt({s2}) ^ (xt({s3}) ^ {s3}) = ?
+if up = (ok) goto (push ({m0_2} = {(in = up)}))
+math_run (xt({s0}) ^ {s0}) ^ {s1} ^ {s2} ^ xt({s3}) = ?
+if up = (ok) goto (push ({m0_3} = {(in = up)}))
+push ({s0} = {m0_0})
+push ({s1} = {m0_1})
+push ({s2} = {m0_2})
+push ({s3} = {m0_3})
+math_run xt({s4}) ^ (xt({s5}) ^ {s5}) ^ {s6} ^ {s7} = ?
+if up = (ok) goto (push ({m1_0} = {(in = up)}))
+math_run {s4} ^ xt({s5}) ^ (xt({s6}) ^ {s6}) ^ {s7} = ?
+if up = (ok) goto (push ({m1_1} = {(in = up)}))
+math_run {s4} ^ {s5} ^ xt({s6}) ^ (xt({s7}) ^ {s7}) = ?
+if up = (ok) goto (push ({m1_2} = {(in = up)}))
+math_run (xt({s4}) ^ {s4}) ^ {s5} ^ {s6} ^ xt({s7}) = ?
+if up = (ok) goto (push ({m1_3} = {(in = up)}))
+push ({s4} = {m1_0})
+push ({s5} = {m1_1})
+push ({s6} = {m1_2})
+push ({s7} = {m1_3})
+math_run xt({s8}) ^ (xt({s9}) ^ {s9}) ^ {s10} ^ {s11} = ?
+if up = (ok) goto (push ({m2_0} = {(in = up)}))
+math_run {s8} ^ xt({s9}) ^ (xt({s10}) ^ {s10}) ^ {s11} = ?
+if up = (ok) goto (push ({m2_1} = {(in = up)}))
+math_run {s8} ^ {s9} ^ xt({s10}) ^ (xt({s11}) ^ {s11}) = ?
+if up = (ok) goto (push ({m2_2} = {(in = up)}))
+math_run (xt({s8}) ^ {s8}) ^ {s9} ^ {s10} ^ xt({s11}) = ?
+if up = (ok) goto (push ({m2_3} = {(in = up)}))
+push ({s8} = {m2_0})
+push ({s9} = {m2_1})
+push ({s10} = {m2_2})
+push ({s11} = {m2_3})
+math_run xt({s12}) ^ (xt({s13}) ^ {s13}) ^ {s14} ^ {s15} = ?
+if up = (ok) goto (push ({m3_0} = {(in = up)}))
+math_run {s12} ^ xt({s13}) ^ (xt({s14}) ^ {s14}) ^ {s15} = ?
+if up = (ok) goto (push ({m3_1} = {(in = up)}))
+math_run {s12} ^ {s13} ^ xt({s14}) ^ (xt({s15}) ^ {s15}) = ?
+if up = (ok) goto (push ({m3_2} = {(in = up)}))
+math_run (xt({s12}) ^ {s12}) ^ {s13} ^ {s14} ^ xt({s15}) = ?
+if up = (ok) goto (push ({m3_3} = {(in = up)}))
+push ({s12} = {m3_0})
+push ({s13} = {m3_1})
+push ({s14} = {m3_2})
+push ({s15} = {m3_3})
+
+#% AddRoundKey
+math_run {s0} ^ bytes_get(RK, 112) = ?
+if up = (ok) goto (push ({s0} = {(in = up)}))
+math_run {s1} ^ bytes_get(RK, 113) = ?
+if up = (ok) goto (push ({s1} = {(in = up)}))
+math_run {s2} ^ bytes_get(RK, 114) = ?
+if up = (ok) goto (push ({s2} = {(in = up)}))
+math_run {s3} ^ bytes_get(RK, 115) = ?
+if up = (ok) goto (push ({s3} = {(in = up)}))
+math_run {s4} ^ bytes_get(RK, 116) = ?
+if up = (ok) goto (push ({s4} = {(in = up)}))
+math_run {s5} ^ bytes_get(RK, 117) = ?
+if up = (ok) goto (push ({s5} = {(in = up)}))
+math_run {s6} ^ bytes_get(RK, 118) = ?
+if up = (ok) goto (push ({s6} = {(in = up)}))
+math_run {s7} ^ bytes_get(RK, 119) = ?
+if up = (ok) goto (push ({s7} = {(in = up)}))
+math_run {s8} ^ bytes_get(RK, 120) = ?
+if up = (ok) goto (push ({s8} = {(in = up)}))
+math_run {s9} ^ bytes_get(RK, 121) = ?
+if up = (ok) goto (push ({s9} = {(in = up)}))
+math_run {s10} ^ bytes_get(RK, 122) = ?
+if up = (ok) goto (push ({s10} = {(in = up)}))
+math_run {s11} ^ bytes_get(RK, 123) = ?
+if up = (ok) goto (push ({s11} = {(in = up)}))
+math_run {s12} ^ bytes_get(RK, 124) = ?
+if up = (ok) goto (push ({s12} = {(in = up)}))
+math_run {s13} ^ bytes_get(RK, 125) = ?
+if up = (ok) goto (push ({s13} = {(in = up)}))
+math_run {s14} ^ bytes_get(RK, 126) = ?
+if up = (ok) goto (push ({s14} = {(in = up)}))
+math_run {s15} ^ bytes_get(RK, 127) = ?
+if up = (ok) goto (push ({s15} = {(in = up)}))
+
+#% Round 8
+#% SubBytes + ShiftRows (state is column-major: s[column*4 + row])
+math_run bytes_get(SB, {s0}) = ?
+if up = (ok) goto (push ({t0} = {(in = up)}))
+math_run bytes_get(SB, {s5}) = ?
+if up = (ok) goto (push ({t1} = {(in = up)}))
+math_run bytes_get(SB, {s10}) = ?
+if up = (ok) goto (push ({t2} = {(in = up)}))
+math_run bytes_get(SB, {s15}) = ?
+if up = (ok) goto (push ({t3} = {(in = up)}))
+math_run bytes_get(SB, {s4}) = ?
+if up = (ok) goto (push ({t4} = {(in = up)}))
+math_run bytes_get(SB, {s9}) = ?
+if up = (ok) goto (push ({t5} = {(in = up)}))
+math_run bytes_get(SB, {s14}) = ?
+if up = (ok) goto (push ({t6} = {(in = up)}))
+math_run bytes_get(SB, {s3}) = ?
+if up = (ok) goto (push ({t7} = {(in = up)}))
+math_run bytes_get(SB, {s8}) = ?
+if up = (ok) goto (push ({t8} = {(in = up)}))
+math_run bytes_get(SB, {s13}) = ?
+if up = (ok) goto (push ({t9} = {(in = up)}))
+math_run bytes_get(SB, {s2}) = ?
+if up = (ok) goto (push ({t10} = {(in = up)}))
+math_run bytes_get(SB, {s7}) = ?
+if up = (ok) goto (push ({t11} = {(in = up)}))
+math_run bytes_get(SB, {s12}) = ?
+if up = (ok) goto (push ({t12} = {(in = up)}))
+math_run bytes_get(SB, {s1}) = ?
+if up = (ok) goto (push ({t13} = {(in = up)}))
+math_run bytes_get(SB, {s6}) = ?
+if up = (ok) goto (push ({t14} = {(in = up)}))
+math_run bytes_get(SB, {s11}) = ?
+if up = (ok) goto (push ({t15} = {(in = up)}))
+push ({s0} = {t0})
+push ({s1} = {t1})
+push ({s2} = {t2})
+push ({s3} = {t3})
+push ({s4} = {t4})
+push ({s5} = {t5})
+push ({s6} = {t6})
+push ({s7} = {t7})
+push ({s8} = {t8})
+push ({s9} = {t9})
+push ({s10} = {t10})
+push ({s11} = {t11})
+push ({s12} = {t12})
+push ({s13} = {t13})
+push ({s14} = {t14})
+push ({s15} = {t15})
+
+#% MixColumns
+math_run xt({s0}) ^ (xt({s1}) ^ {s1}) ^ {s2} ^ {s3} = ?
+if up = (ok) goto (push ({m0_0} = {(in = up)}))
+math_run {s0} ^ xt({s1}) ^ (xt({s2}) ^ {s2}) ^ {s3} = ?
+if up = (ok) goto (push ({m0_1} = {(in = up)}))
+math_run {s0} ^ {s1} ^ xt({s2}) ^ (xt({s3}) ^ {s3}) = ?
+if up = (ok) goto (push ({m0_2} = {(in = up)}))
+math_run (xt({s0}) ^ {s0}) ^ {s1} ^ {s2} ^ xt({s3}) = ?
+if up = (ok) goto (push ({m0_3} = {(in = up)}))
+push ({s0} = {m0_0})
+push ({s1} = {m0_1})
+push ({s2} = {m0_2})
+push ({s3} = {m0_3})
+math_run xt({s4}) ^ (xt({s5}) ^ {s5}) ^ {s6} ^ {s7} = ?
+if up = (ok) goto (push ({m1_0} = {(in = up)}))
+math_run {s4} ^ xt({s5}) ^ (xt({s6}) ^ {s6}) ^ {s7} = ?
+if up = (ok) goto (push ({m1_1} = {(in = up)}))
+math_run {s4} ^ {s5} ^ xt({s6}) ^ (xt({s7}) ^ {s7}) = ?
+if up = (ok) goto (push ({m1_2} = {(in = up)}))
+math_run (xt({s4}) ^ {s4}) ^ {s5} ^ {s6} ^ xt({s7}) = ?
+if up = (ok) goto (push ({m1_3} = {(in = up)}))
+push ({s4} = {m1_0})
+push ({s5} = {m1_1})
+push ({s6} = {m1_2})
+push ({s7} = {m1_3})
+math_run xt({s8}) ^ (xt({s9}) ^ {s9}) ^ {s10} ^ {s11} = ?
+if up = (ok) goto (push ({m2_0} = {(in = up)}))
+math_run {s8} ^ xt({s9}) ^ (xt({s10}) ^ {s10}) ^ {s11} = ?
+if up = (ok) goto (push ({m2_1} = {(in = up)}))
+math_run {s8} ^ {s9} ^ xt({s10}) ^ (xt({s11}) ^ {s11}) = ?
+if up = (ok) goto (push ({m2_2} = {(in = up)}))
+math_run (xt({s8}) ^ {s8}) ^ {s9} ^ {s10} ^ xt({s11}) = ?
+if up = (ok) goto (push ({m2_3} = {(in = up)}))
+push ({s8} = {m2_0})
+push ({s9} = {m2_1})
+push ({s10} = {m2_2})
+push ({s11} = {m2_3})
+math_run xt({s12}) ^ (xt({s13}) ^ {s13}) ^ {s14} ^ {s15} = ?
+if up = (ok) goto (push ({m3_0} = {(in = up)}))
+math_run {s12} ^ xt({s13}) ^ (xt({s14}) ^ {s14}) ^ {s15} = ?
+if up = (ok) goto (push ({m3_1} = {(in = up)}))
+math_run {s12} ^ {s13} ^ xt({s14}) ^ (xt({s15}) ^ {s15}) = ?
+if up = (ok) goto (push ({m3_2} = {(in = up)}))
+math_run (xt({s12}) ^ {s12}) ^ {s13} ^ {s14} ^ xt({s15}) = ?
+if up = (ok) goto (push ({m3_3} = {(in = up)}))
+push ({s12} = {m3_0})
+push ({s13} = {m3_1})
+push ({s14} = {m3_2})
+push ({s15} = {m3_3})
+
+#% AddRoundKey
+math_run {s0} ^ bytes_get(RK, 128) = ?
+if up = (ok) goto (push ({s0} = {(in = up)}))
+math_run {s1} ^ bytes_get(RK, 129) = ?
+if up = (ok) goto (push ({s1} = {(in = up)}))
+math_run {s2} ^ bytes_get(RK, 130) = ?
+if up = (ok) goto (push ({s2} = {(in = up)}))
+math_run {s3} ^ bytes_get(RK, 131) = ?
+if up = (ok) goto (push ({s3} = {(in = up)}))
+math_run {s4} ^ bytes_get(RK, 132) = ?
+if up = (ok) goto (push ({s4} = {(in = up)}))
+math_run {s5} ^ bytes_get(RK, 133) = ?
+if up = (ok) goto (push ({s5} = {(in = up)}))
+math_run {s6} ^ bytes_get(RK, 134) = ?
+if up = (ok) goto (push ({s6} = {(in = up)}))
+math_run {s7} ^ bytes_get(RK, 135) = ?
+if up = (ok) goto (push ({s7} = {(in = up)}))
+math_run {s8} ^ bytes_get(RK, 136) = ?
+if up = (ok) goto (push ({s8} = {(in = up)}))
+math_run {s9} ^ bytes_get(RK, 137) = ?
+if up = (ok) goto (push ({s9} = {(in = up)}))
+math_run {s10} ^ bytes_get(RK, 138) = ?
+if up = (ok) goto (push ({s10} = {(in = up)}))
+math_run {s11} ^ bytes_get(RK, 139) = ?
+if up = (ok) goto (push ({s11} = {(in = up)}))
+math_run {s12} ^ bytes_get(RK, 140) = ?
+if up = (ok) goto (push ({s12} = {(in = up)}))
+math_run {s13} ^ bytes_get(RK, 141) = ?
+if up = (ok) goto (push ({s13} = {(in = up)}))
+math_run {s14} ^ bytes_get(RK, 142) = ?
+if up = (ok) goto (push ({s14} = {(in = up)}))
+math_run {s15} ^ bytes_get(RK, 143) = ?
+if up = (ok) goto (push ({s15} = {(in = up)}))
+
+#% Round 9
+#% SubBytes + ShiftRows (state is column-major: s[column*4 + row])
+math_run bytes_get(SB, {s0}) = ?
+if up = (ok) goto (push ({t0} = {(in = up)}))
+math_run bytes_get(SB, {s5}) = ?
+if up = (ok) goto (push ({t1} = {(in = up)}))
+math_run bytes_get(SB, {s10}) = ?
+if up = (ok) goto (push ({t2} = {(in = up)}))
+math_run bytes_get(SB, {s15}) = ?
+if up = (ok) goto (push ({t3} = {(in = up)}))
+math_run bytes_get(SB, {s4}) = ?
+if up = (ok) goto (push ({t4} = {(in = up)}))
+math_run bytes_get(SB, {s9}) = ?
+if up = (ok) goto (push ({t5} = {(in = up)}))
+math_run bytes_get(SB, {s14}) = ?
+if up = (ok) goto (push ({t6} = {(in = up)}))
+math_run bytes_get(SB, {s3}) = ?
+if up = (ok) goto (push ({t7} = {(in = up)}))
+math_run bytes_get(SB, {s8}) = ?
+if up = (ok) goto (push ({t8} = {(in = up)}))
+math_run bytes_get(SB, {s13}) = ?
+if up = (ok) goto (push ({t9} = {(in = up)}))
+math_run bytes_get(SB, {s2}) = ?
+if up = (ok) goto (push ({t10} = {(in = up)}))
+math_run bytes_get(SB, {s7}) = ?
+if up = (ok) goto (push ({t11} = {(in = up)}))
+math_run bytes_get(SB, {s12}) = ?
+if up = (ok) goto (push ({t12} = {(in = up)}))
+math_run bytes_get(SB, {s1}) = ?
+if up = (ok) goto (push ({t13} = {(in = up)}))
+math_run bytes_get(SB, {s6}) = ?
+if up = (ok) goto (push ({t14} = {(in = up)}))
+math_run bytes_get(SB, {s11}) = ?
+if up = (ok) goto (push ({t15} = {(in = up)}))
+push ({s0} = {t0})
+push ({s1} = {t1})
+push ({s2} = {t2})
+push ({s3} = {t3})
+push ({s4} = {t4})
+push ({s5} = {t5})
+push ({s6} = {t6})
+push ({s7} = {t7})
+push ({s8} = {t8})
+push ({s9} = {t9})
+push ({s10} = {t10})
+push ({s11} = {t11})
+push ({s12} = {t12})
+push ({s13} = {t13})
+push ({s14} = {t14})
+push ({s15} = {t15})
+
+#% MixColumns
+math_run xt({s0}) ^ (xt({s1}) ^ {s1}) ^ {s2} ^ {s3} = ?
+if up = (ok) goto (push ({m0_0} = {(in = up)}))
+math_run {s0} ^ xt({s1}) ^ (xt({s2}) ^ {s2}) ^ {s3} = ?
+if up = (ok) goto (push ({m0_1} = {(in = up)}))
+math_run {s0} ^ {s1} ^ xt({s2}) ^ (xt({s3}) ^ {s3}) = ?
+if up = (ok) goto (push ({m0_2} = {(in = up)}))
+math_run (xt({s0}) ^ {s0}) ^ {s1} ^ {s2} ^ xt({s3}) = ?
+if up = (ok) goto (push ({m0_3} = {(in = up)}))
+push ({s0} = {m0_0})
+push ({s1} = {m0_1})
+push ({s2} = {m0_2})
+push ({s3} = {m0_3})
+math_run xt({s4}) ^ (xt({s5}) ^ {s5}) ^ {s6} ^ {s7} = ?
+if up = (ok) goto (push ({m1_0} = {(in = up)}))
+math_run {s4} ^ xt({s5}) ^ (xt({s6}) ^ {s6}) ^ {s7} = ?
+if up = (ok) goto (push ({m1_1} = {(in = up)}))
+math_run {s4} ^ {s5} ^ xt({s6}) ^ (xt({s7}) ^ {s7}) = ?
+if up = (ok) goto (push ({m1_2} = {(in = up)}))
+math_run (xt({s4}) ^ {s4}) ^ {s5} ^ {s6} ^ xt({s7}) = ?
+if up = (ok) goto (push ({m1_3} = {(in = up)}))
+push ({s4} = {m1_0})
+push ({s5} = {m1_1})
+push ({s6} = {m1_2})
+push ({s7} = {m1_3})
+math_run xt({s8}) ^ (xt({s9}) ^ {s9}) ^ {s10} ^ {s11} = ?
+if up = (ok) goto (push ({m2_0} = {(in = up)}))
+math_run {s8} ^ xt({s9}) ^ (xt({s10}) ^ {s10}) ^ {s11} = ?
+if up = (ok) goto (push ({m2_1} = {(in = up)}))
+math_run {s8} ^ {s9} ^ xt({s10}) ^ (xt({s11}) ^ {s11}) = ?
+if up = (ok) goto (push ({m2_2} = {(in = up)}))
+math_run (xt({s8}) ^ {s8}) ^ {s9} ^ {s10} ^ xt({s11}) = ?
+if up = (ok) goto (push ({m2_3} = {(in = up)}))
+push ({s8} = {m2_0})
+push ({s9} = {m2_1})
+push ({s10} = {m2_2})
+push ({s11} = {m2_3})
+math_run xt({s12}) ^ (xt({s13}) ^ {s13}) ^ {s14} ^ {s15} = ?
+if up = (ok) goto (push ({m3_0} = {(in = up)}))
+math_run {s12} ^ xt({s13}) ^ (xt({s14}) ^ {s14}) ^ {s15} = ?
+if up = (ok) goto (push ({m3_1} = {(in = up)}))
+math_run {s12} ^ {s13} ^ xt({s14}) ^ (xt({s15}) ^ {s15}) = ?
+if up = (ok) goto (push ({m3_2} = {(in = up)}))
+math_run (xt({s12}) ^ {s12}) ^ {s13} ^ {s14} ^ xt({s15}) = ?
+if up = (ok) goto (push ({m3_3} = {(in = up)}))
+push ({s12} = {m3_0})
+push ({s13} = {m3_1})
+push ({s14} = {m3_2})
+push ({s15} = {m3_3})
+
+#% AddRoundKey
+math_run {s0} ^ bytes_get(RK, 144) = ?
+if up = (ok) goto (push ({s0} = {(in = up)}))
+math_run {s1} ^ bytes_get(RK, 145) = ?
+if up = (ok) goto (push ({s1} = {(in = up)}))
+math_run {s2} ^ bytes_get(RK, 146) = ?
+if up = (ok) goto (push ({s2} = {(in = up)}))
+math_run {s3} ^ bytes_get(RK, 147) = ?
+if up = (ok) goto (push ({s3} = {(in = up)}))
+math_run {s4} ^ bytes_get(RK, 148) = ?
+if up = (ok) goto (push ({s4} = {(in = up)}))
+math_run {s5} ^ bytes_get(RK, 149) = ?
+if up = (ok) goto (push ({s5} = {(in = up)}))
+math_run {s6} ^ bytes_get(RK, 150) = ?
+if up = (ok) goto (push ({s6} = {(in = up)}))
+math_run {s7} ^ bytes_get(RK, 151) = ?
+if up = (ok) goto (push ({s7} = {(in = up)}))
+math_run {s8} ^ bytes_get(RK, 152) = ?
+if up = (ok) goto (push ({s8} = {(in = up)}))
+math_run {s9} ^ bytes_get(RK, 153) = ?
+if up = (ok) goto (push ({s9} = {(in = up)}))
+math_run {s10} ^ bytes_get(RK, 154) = ?
+if up = (ok) goto (push ({s10} = {(in = up)}))
+math_run {s11} ^ bytes_get(RK, 155) = ?
+if up = (ok) goto (push ({s11} = {(in = up)}))
+math_run {s12} ^ bytes_get(RK, 156) = ?
+if up = (ok) goto (push ({s12} = {(in = up)}))
+math_run {s13} ^ bytes_get(RK, 157) = ?
+if up = (ok) goto (push ({s13} = {(in = up)}))
+math_run {s14} ^ bytes_get(RK, 158) = ?
+if up = (ok) goto (push ({s14} = {(in = up)}))
+math_run {s15} ^ bytes_get(RK, 159) = ?
+if up = (ok) goto (push ({s15} = {(in = up)}))
+
+#% Round 10 - final round, no MixColumns
+#% SubBytes + ShiftRows (state is column-major: s[column*4 + row])
+math_run bytes_get(SB, {s0}) = ?
+if up = (ok) goto (push ({t0} = {(in = up)}))
+math_run bytes_get(SB, {s5}) = ?
+if up = (ok) goto (push ({t1} = {(in = up)}))
+math_run bytes_get(SB, {s10}) = ?
+if up = (ok) goto (push ({t2} = {(in = up)}))
+math_run bytes_get(SB, {s15}) = ?
+if up = (ok) goto (push ({t3} = {(in = up)}))
+math_run bytes_get(SB, {s4}) = ?
+if up = (ok) goto (push ({t4} = {(in = up)}))
+math_run bytes_get(SB, {s9}) = ?
+if up = (ok) goto (push ({t5} = {(in = up)}))
+math_run bytes_get(SB, {s14}) = ?
+if up = (ok) goto (push ({t6} = {(in = up)}))
+math_run bytes_get(SB, {s3}) = ?
+if up = (ok) goto (push ({t7} = {(in = up)}))
+math_run bytes_get(SB, {s8}) = ?
+if up = (ok) goto (push ({t8} = {(in = up)}))
+math_run bytes_get(SB, {s13}) = ?
+if up = (ok) goto (push ({t9} = {(in = up)}))
+math_run bytes_get(SB, {s2}) = ?
+if up = (ok) goto (push ({t10} = {(in = up)}))
+math_run bytes_get(SB, {s7}) = ?
+if up = (ok) goto (push ({t11} = {(in = up)}))
+math_run bytes_get(SB, {s12}) = ?
+if up = (ok) goto (push ({t12} = {(in = up)}))
+math_run bytes_get(SB, {s1}) = ?
+if up = (ok) goto (push ({t13} = {(in = up)}))
+math_run bytes_get(SB, {s6}) = ?
+if up = (ok) goto (push ({t14} = {(in = up)}))
+math_run bytes_get(SB, {s11}) = ?
+if up = (ok) goto (push ({t15} = {(in = up)}))
+push ({s0} = {t0})
+push ({s1} = {t1})
+push ({s2} = {t2})
+push ({s3} = {t3})
+push ({s4} = {t4})
+push ({s5} = {t5})
+push ({s6} = {t6})
+push ({s7} = {t7})
+push ({s8} = {t8})
+push ({s9} = {t9})
+push ({s10} = {t10})
+push ({s11} = {t11})
+push ({s12} = {t12})
+push ({s13} = {t13})
+push ({s14} = {t14})
+push ({s15} = {t15})
+
+#% AddRoundKey
+math_run {s0} ^ bytes_get(RK, 160) = ?
+if up = (ok) goto (push ({s0} = {(in = up)}))
+math_run {s1} ^ bytes_get(RK, 161) = ?
+if up = (ok) goto (push ({s1} = {(in = up)}))
+math_run {s2} ^ bytes_get(RK, 162) = ?
+if up = (ok) goto (push ({s2} = {(in = up)}))
+math_run {s3} ^ bytes_get(RK, 163) = ?
+if up = (ok) goto (push ({s3} = {(in = up)}))
+math_run {s4} ^ bytes_get(RK, 164) = ?
+if up = (ok) goto (push ({s4} = {(in = up)}))
+math_run {s5} ^ bytes_get(RK, 165) = ?
+if up = (ok) goto (push ({s5} = {(in = up)}))
+math_run {s6} ^ bytes_get(RK, 166) = ?
+if up = (ok) goto (push ({s6} = {(in = up)}))
+math_run {s7} ^ bytes_get(RK, 167) = ?
+if up = (ok) goto (push ({s7} = {(in = up)}))
+math_run {s8} ^ bytes_get(RK, 168) = ?
+if up = (ok) goto (push ({s8} = {(in = up)}))
+math_run {s9} ^ bytes_get(RK, 169) = ?
+if up = (ok) goto (push ({s9} = {(in = up)}))
+math_run {s10} ^ bytes_get(RK, 170) = ?
+if up = (ok) goto (push ({s10} = {(in = up)}))
+math_run {s11} ^ bytes_get(RK, 171) = ?
+if up = (ok) goto (push ({s11} = {(in = up)}))
+math_run {s12} ^ bytes_get(RK, 172) = ?
+if up = (ok) goto (push ({s12} = {(in = up)}))
+math_run {s13} ^ bytes_get(RK, 173) = ?
+if up = (ok) goto (push ({s13} = {(in = up)}))
+math_run {s14} ^ bytes_get(RK, 174) = ?
+if up = (ok) goto (push ({s14} = {(in = up)}))
+math_run {s15} ^ bytes_get(RK, 175) = ?
+if up = (ok) goto (push ({s15} = {(in = up)}))
+
+#% Assemble the ciphertext as hex
+math_run hex({s0}, 2) = ?
+if up = (ok) goto (push ({h0} = {(in = up)}))
+math_run hex({s1}, 2) = ?
+if up = (ok) goto (push ({h1} = {(in = up)}))
+math_run hex({s2}, 2) = ?
+if up = (ok) goto (push ({h2} = {(in = up)}))
+math_run hex({s3}, 2) = ?
+if up = (ok) goto (push ({h3} = {(in = up)}))
+math_run hex({s4}, 2) = ?
+if up = (ok) goto (push ({h4} = {(in = up)}))
+math_run hex({s5}, 2) = ?
+if up = (ok) goto (push ({h5} = {(in = up)}))
+math_run hex({s6}, 2) = ?
+if up = (ok) goto (push ({h6} = {(in = up)}))
+math_run hex({s7}, 2) = ?
+if up = (ok) goto (push ({h7} = {(in = up)}))
+math_run hex({s8}, 2) = ?
+if up = (ok) goto (push ({h8} = {(in = up)}))
+math_run hex({s9}, 2) = ?
+if up = (ok) goto (push ({h9} = {(in = up)}))
+math_run hex({s10}, 2) = ?
+if up = (ok) goto (push ({h10} = {(in = up)}))
+math_run hex({s11}, 2) = ?
+if up = (ok) goto (push ({h11} = {(in = up)}))
+math_run hex({s12}, 2) = ?
+if up = (ok) goto (push ({h12} = {(in = up)}))
+math_run hex({s13}, 2) = ?
+if up = (ok) goto (push ({h13} = {(in = up)}))
+math_run hex({s14}, 2) = ?
+if up = (ok) goto (push ({h14} = {(in = up)}))
+math_run hex({s15}, 2) = ?
+if up = (ok) goto (push ({h15} = {(in = up)}))
+push ({cipher} = {h0})
+push ({cipher} = {cipher}{h1})
+push ({cipher} = {cipher}{h2})
+push ({cipher} = {cipher}{h3})
+push ({cipher} = {cipher}{h4})
+push ({cipher} = {cipher}{h5})
+push ({cipher} = {cipher}{h6})
+push ({cipher} = {cipher}{h7})
+push ({cipher} = {cipher}{h8})
+push ({cipher} = {cipher}{h9})
+push ({cipher} = {cipher}{h10})
+push ({cipher} = {cipher}{h11})
+push ({cipher} = {cipher}{h12})
+push ({cipher} = {cipher}{h13})
+push ({cipher} = {cipher}{h14})
+push ({cipher} = {cipher}{h15})
+print (<{cipher}>)

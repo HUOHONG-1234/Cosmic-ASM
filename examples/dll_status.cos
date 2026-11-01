@@ -1,0 +1,22 @@
+#% v4 DLL: load, call, query status, then unload
+#% Windows uses kernel32; other systems can point this at libc instead.
+#dll
+call = (DLL)
+
+#extern gettickcount () -> DWORD as GetTickCount
+#link kernel32
+
+calldll = (kernel32)
+cdll = status (kernel32)
+if up = (ok) goto (push ({state} = {(in = up)}))
+
+cdll = come (kernel32) (gettickcount)
+if up = (ok) goto (push ({ticks} = {(in = up)}))
+
+cdll = out (kernel32)
+cdll = status (kernel32)
+if up = (ok) goto (push ({after} = {(in = up)}))
+
+print (<{state}>)
+print (<{ticks}>)
+print (<{after}>)

@@ -1,0 +1,19 @@
+#%precision = 17
+function factorial(n) = choose(n <= 1, 1, n * factorial(n - 1))
+
+math_run factorial(10) = ?
+if up = (ok) goto (push ({factorial_result} = {(in = up)}))
+print (<{factorial_result}>)
+
+#%math can also be selected per expression without changing the global mode
+math_run complex(1, 2) * complex(3, -1) = ? -complex
+if up = (ok) goto (push ({complex_result} = {(in = up)}))
+print (<{complex_result}>)
+
+math_run array_sum([1, 2, 3]) = ?
+if up = (ok) goto (push ({array_result} = {(in = up)}))
+print (<{array_result}>)
+
+math_run matrix2_det([[1, 2], [3, 4]]) = ?
+if up = (ok) goto (push ({determinant} = {(in = up)}))
+print (<{determinant}>)

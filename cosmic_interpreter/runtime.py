@@ -189,6 +189,17 @@ def _dll_library_candidates(name: str) -> list[str]:
         if not name.lower().endswith((".dll", ".drv")):
             candidates.append(name + ".dll")
         candidates.append(_find_library(name))
+        # Python 3.8 起 ctypes 不再搜索当前工作目录，
+        # 也不搜索 PATH。显式把 cwd / PATH / 脚本目录全试一遍。
+        base = name if name.lower().endswith(".dll") else name + ".dll"
+        probe_dirs = [os.getcwd()]
+        for entry in os.environ.get("PATH", "").split(os.pathsep):
+            if entry:
+                probe_dirs.append(entry)
+        for directory in probe_dirs:
+            full = os.path.join(directory, base)
+            if os.path.isfile(full):
+                candidates.append(full)
     else:
         # Linux 上 libc.so 往往是一个 ASCII 链接脚本（不是 ELF），
         # 真正的共享库是 libc.so.6。find_library('c') 能拿到正确名字。
@@ -501,7 +512,59 @@ def _roll_die(maximum: float, minimum: float) -> int:
     return random.SystemRandom().randint(lower, upper)
 
 
-_MATH_FUNCTIONS: dict[str, Callable[..., int | float | complex]] = {
+def _fixed_precision(precision: int) -> int:
+    if isinstance(precision, bool) or not isinstance(precision, int):
+        raise ValueError("precision must be an integer")
+    if not 0 <= precision <= 1000:
+        raise ValueError("precision must be between 0 and 1000")
+    return precision
+
+
+def _atan_reciprocal_scaled(denominator: int, scale: int) -> int:
+    total = 0
+    power = denominator
+    index = 0
+    while True:
+        term = scale // (power * (2 * index + 1))
+        if term == 0:
+            return total
+        total = total + term if index % 2 == 0 else total - term
+        power *= denominator * denominator
+        index += 1
+
+
+def _fixed_constant_digits(name: str, precision: int) -> int:
+    precision = _fixed_precision(precision)
+    guard = 12
+    scale = 10 ** (precision + guard)
+    if name == "pi":
+        scaled = 16 * _atan_reciprocal_scaled(5, scale)
+        scaled -= 4 * _atan_reciprocal_scaled(239, scale)
+    elif name == "e":
+        scaled = scale
+        term = scale
+        for divisor in range(1, precision + guard + 2):
+            term //= divisor
+            if term == 0:
+                break
+            scaled += term
+    elif name == "sqrt2":
+        scaled = math.isqrt(2 * scale * scale)
+    else:
+        raise ValueError(f"unknown fixed-point constant '{name}'")
+    return scaled // (10 ** guard)
+
+
+def _fixed_constant_string(name: str, precision: int) -> str:
+    digits = _fixed_precision(precision)
+    value = str(_fixed_constant_digits(name, digits))
+    if digits == 0:
+        return value
+    value = value.zfill(digits + 1)
+    return value[:-digits] + "." + value[-digits:]
+
+
+_MATH_FUNCTIONS: dict[str, Callable[..., int | float | complex | str]] = {
     "abs": abs,
     "sqrt": math.sqrt,
     "sin": math.sin,
@@ -532,6 +595,12 @@ _MATH_FUNCTIONS: dict[str, Callable[..., int | float | complex]] = {
         math.lgamma(a) + math.lgamma(b) - math.lgamma(a + b)
     ),
     "zeta": lambda s: _riemann_zeta(s),
+    "pi_digits": lambda n: _fixed_constant_digits("pi", n),
+    "pi_str": lambda n: _fixed_constant_string("pi", n),
+    "e_digits": lambda n: _fixed_constant_digits("e", n),
+    "e_str": lambda n: _fixed_constant_string("e", n),
+    "sqrt2_digits": lambda n: _fixed_constant_digits("sqrt2", n),
+    "sqrt2_str": lambda n: _fixed_constant_string("sqrt2", n),
     "real": lambda value: value.real if isinstance(value, complex) else value,
     "imag": lambda value: value.imag if isinstance(value, complex) else 0,
     "conj": complex.conjugate,
@@ -1480,9 +1549,9 @@ def _evaluate_expression(
                 raise ValueError("uint32 mode requires an integer result")
             value = int(value) & 0xFFFFFFFF
         if math_mode == "bigint":
-            if isinstance(value, bool) or not isinstance(value, int):
+            if isinstance(value, bool) or not isinstance(value, (int, str)):
                 raise ValueError("bigint mode requires integer-only expressions")
-            if value.bit_length() > 1_000_000:
+            if isinstance(value, int) and value.bit_length() > 1_000_000:
                 raise ValueError("integer result is too large")
     except (SyntaxError, ValueError, TypeError, ZeroDivisionError, OverflowError) as error:
         raise RuntimeError(line, f"invalid math expression: {error}") from error
@@ -1819,6 +1888,8 @@ class Interpreter:
                 "solve_linear", "hex", "unhex", "bytes_len", "bytes_get",
                 "bytes_set", "median", "variance", "correlation", "percentile",
                 "trapz", "simpson",
+                "pi_digits", "pi_str", "e_digits", "e_str",
+                "sqrt2_digits", "sqrt2_str",
             }:
                 raise RuntimeError(statement.line, f"function name '{name}' is reserved")
             self.functions[name] = (

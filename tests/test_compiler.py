@@ -62,6 +62,14 @@ class CompilerTests(unittest.TestCase):
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn(b"already declared", completed.stderr)
 
+    def test_compiled_kill_force_wipes_variable_storage(self) -> None:
+        completed = self.compile_and_run(
+            'var secret = {"sensitive text"}\nkill {secret} -force\n'
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        generated = generate_c(parse('var secret = {"sensitive text"}\nkill {secret} -force\n'))
+        self.assertIn("secure_wipe(", generated)
+
     def test_compiled_math_accepts_braced_string_literal(self) -> None:
         completed = self.compile_and_run(
             'math_run ord({"A"}) = ? -int32\n'
@@ -70,6 +78,29 @@ class CompilerTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0)
         self.assertEqual(completed.stdout.strip(), b"65")
+
+    def test_compiled_bigint_fixed_point_constants(self) -> None:
+        completed = self.compile_and_run(
+            "#%math = bigint\n"
+            "math_run pi_digits(40) = ?\n"
+            "if up = (ok) goto (push ({pi40} = {(in = up)}))\n"
+            "print (<{pi40}>)\n"
+            "math_run pi_str(5) = ?\n"
+            "if up = (ok) goto (push ({pi5} = {(in = up)}))\n"
+            "print (<{pi5}>)\n"
+            "math_run e_str(10) = ?\n"
+            "if up = (ok) goto (push ({e10} = {(in = up)}))\n"
+            "print (<{e10}>)\n"
+            "math_run sqrt2_str(10) = ?\n"
+            "if up = (ok) goto (push ({sqrt10} = {(in = up)}))\n"
+            "print (<{sqrt10}>)\n"
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(
+            completed.stdout.replace(b"\r\n", b"\n"),
+            b"31415926535897932384626433832795028841971\n"
+            b"3.14159\n2.7182818284\n1.4142135623\n",
+        )
 
     def test_compiles_and_runs_variable_loop_math_and_dog(self) -> None:
         source = """\
@@ -397,6 +428,16 @@ start(normal) = {math}
         )
         self.assertEqual(completed.returncode, 0)
         self.assertEqual(completed.stdout.strip(), b"3628800")
+
+    def test_compiled_generic_expression_function(self) -> None:
+        completed = self.compile_and_run(
+            "generic function square(value) = value * value\n"
+            "math_run square(5.5) = ?\n"
+            "if up = (ok) goto (push ({answer} = {(in = up)}))\n"
+            "print (<{answer}>)\n"
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(completed.stdout.strip(), b"30.25")
 
     def test_compiled_user_function_in_loop_condition(self) -> None:
         completed = self.compile_and_run(

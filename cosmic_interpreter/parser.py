@@ -50,7 +50,7 @@ _VAR_RE = re.compile(r"var\s+([A-Za-z_]\w*)\s*=\s*(.+)\s*$", re.I)
 _ENCODING_RE = re.compile(r"([A-Za-z_]\w*)\s*=\s*([A-Za-z0-9_-]+)\s*$", re.I)
 _SLEEP_RE = re.compile(r"sleep\s*\(\s*(\d+(?:\.\d+)?)\s*\)\s*(?:\{\s*s\s*\})?", re.I)
 _EXIT_RE = re.compile(r"exit\s*\(\s*(\d+)\s*\)", re.I)
-_KILL_RE = re.compile(r"kill\s*\{\s*([A-Za-z_]\w*)\s*\}(?:\s+-force)?", re.I)
+_KILL_RE = re.compile(r"kill\s*\{\s*([A-Za-z_]\w*)\s*\}(?:\s+(-force))?", re.I)
 _PRINT_RE = re.compile(r"print\s*\(\s*<(.+?)>\s*\)(?:\s+-([A-Za-z0-9_-]+))?", re.I)
 _MATH_RE = re.compile(
     r"math_run\s+(.+?)\s*=\s*\?(?:\s+-\s*(int32|int64|uint32|float64|complex|bigint))?",
@@ -106,7 +106,7 @@ _BYTES_CALL_RE = re.compile(
     r"bytes_(set|get|len)\s*\((.*)\)\s*(?:=\s*\?)?\s*$", re.I
 )
 _FUNCTION_RE = re.compile(
-    r"function\s+([A-Za-z_]\w*)\s*\((.*?)\)\s*=\s*(.+)\s*$",
+    r"(?:generic\s+)?function\s+([A-Za-z_]\w*)\s*\((.*?)\)\s*=\s*(.+)\s*$",
     re.I,
 )
 
@@ -607,6 +607,7 @@ class _Parser:
             function_match = _FUNCTION_RE.fullmatch(line)
             if function_match:
                 name, raw_parameters, expression = function_match.groups()
+                is_generic = line.lower().startswith("generic ")
                 self._validate_braced_expression(expression, number)
                 parameters = [
                     parameter.strip()
@@ -621,11 +622,16 @@ class _Parser:
                     Statement(
                         "function",
                         number,
-                        {"name": name, "parameters": parameters, "expression": expression.strip()},
+                        {
+                            "name": name,
+                            "parameters": parameters,
+                            "expression": expression.strip(),
+                            "generic": is_generic,
+                        },
                     )
                 )
                 continue
-            if line.lower().startswith("function"):
+            if line.lower().startswith(("function", "generic function")):
                 raise ParseError(number, "invalid function definition")
 
             exit_match = _EXIT_RE.fullmatch(line)
@@ -658,7 +664,10 @@ class _Parser:
 
             kill_match = _KILL_RE.fullmatch(line)
             if kill_match:
-                statements.append(Statement("kill", number, {"name": kill_match.group(1)}))
+                statements.append(Statement(
+                    "kill", number,
+                    {"name": kill_match.group(1), "force": bool(kill_match.group(2))},
+                ))
                 continue
             if line.lower().startswith("kill"):
                 raise ParseError(number, "invalid kill expression")

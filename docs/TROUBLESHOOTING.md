@@ -112,6 +112,116 @@ call = (math)
 
 ---
 
+### component 'pe' is not supported
+
+v1 的组件表里有 `#pe`，但**从未实现**。v5 及以前的表现是：
+
+```asm
+# 解释器：不报错，只擦一行 warning
+warning: line 3: pe is recognized but not implemented
+```
+
+编译版更安静：生成一个 `STATUS_OK` 占位，什么也不做。
+
+**这种状态最坑：它既不工作，又不像坏了。**
+
+v6 起改为明确的编译错误。想解析 PE 文件的正确做法是写普通程序读字节：
+
+```asm
+#bytes
+bytes head = [0x4D, 0x5A]
+bytes_len(head) = ? -int64
+```
+
+---
+
+### gc_pin / gc_unpin：声音放一半就断了
+
+如果用了 `#dll` 把缓冲区交给异步外部库（典型：`PlaySoundA` 的 `SND_MEMORY`），**必须成对调用 pin/unpin**：
+
+```asm
+  = gc_pin (buf)
+cdll = come (winmm) (playsounda) (0) (buf) (0)
+  = gc_unpin (buf)
+```
+
+原因：`semi` 档用引用计数，函数一返回本地计数归零，缓冲区被释放，但声音还在放。
+
+详见 [v6 设计](./v6-gc-asm.md)。
+
+---
+
+### `#asm = x86_64` 会被当编码声明
+
+```
+line 4: unknown encoding: x86_64
+```
+
+```asm
+# 错
+#asm = x86_64
+
+# 对（声明写注释，标签单独一行）
+#%asm = x86_64 (clobber: rax, memory)
+#asm
+{
+    ...
+}
+```
+
+跟 `#math = int64` 是同一个坑：`#` 开头且形如 `名字 = 值` 的一律进编码层，汇编块也不例外。
+
+---
+
+### asm block requires <arch>, current target is <arch>
+
+v6 起汇编块强制声明架构，不匹配就编译期失败：
+
+```asm
+#%asm = arm64 (clobber: x0, memory)
+#asm
+{
+    mov x0, #0
+}
+```
+
+在 x86_64 上编这份文件报 `asm block at line N requires arm64, current target is x86_64`。
+
+**这是故意的**，不做静默降级——不支持就跳过会让程序在另一个平台上悄悄干错事。要么改架构字段，要么删掉这一块。
+
+---
+
+### asm block missing clobber list
+
+```asm
+# 错：没写 clobber
+#%asm = x86_64
+#asm
+{
+    nop
+}
+```
+
+clobber 必须显式写，`memory` 也不能省。空体写 `(clobber: memory)`。
+
+---
+
+### The_world 之后程序不再回收内存
+
+`The_world (stop)` 记停表深度，必须配对的 `(start)` 才恢复：
+
+```asm
+  = The_world (stop)
+  # ... 批量构造 ...
+  = The_world (start)
+```
+
+两层 `stop` 需两次 `start`。块退出时深度不为零会被自动清零并给 warning——所以跨块泄露不会拖死整棵树，但**同一块里忘了 `start`，后面的代码就一直不回收**。
+
+`#gc = mark` 下可用 `The_world (force)` 在停表期间强制执行一次回收，这是排查误用的手段。
+
+---
+
 ### father must refer to up
 
 ```asm

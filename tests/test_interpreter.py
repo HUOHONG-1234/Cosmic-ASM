@@ -57,6 +57,32 @@ print (<{number}>)
         )
         self.assertEqual(interpreter.last.value, "65")
 
+    def test_bigint_fixed_point_constants(self) -> None:
+        interpreter, _output, _errors = self.run_source(
+            "math_run pi_digits(40) = ? -bigint\n"
+        )
+        self.assertEqual(
+            interpreter.last.value,
+            "31415926535897932384626433832795028841971",
+        )
+        interpreter, _output, _errors = self.run_source(
+            "math_run pi_str(5) = ? -bigint\n"
+        )
+        self.assertEqual(interpreter.last.value, "3.14159")
+        for expression, expected in (
+            ("e_str(10)", "2.7182818284"),
+            ("sqrt2_str(10)", "1.4142135623"),
+        ):
+            interpreter, _output, _errors = self.run_source(
+                f"math_run {expression} = ? -bigint\n"
+            )
+            self.assertEqual(interpreter.last.value, expected)
+
+    def test_fixed_point_constants_validate_precision(self) -> None:
+        for precision in (-1, 1001):
+            with self.assertRaisesRegex(RuntimeError, "precision must be between 0 and 1000"):
+                self.run_source(f"math_run pi_digits({precision}) = ? -bigint\n")
+
     def test_runs_math_example(self) -> None:
         source = """\
 #math
@@ -269,6 +295,13 @@ start(normal) = {math}
             "math_run factorial(10) = ?\n"
         )
         self.assertEqual(interpreter.last.value, "3628800")
+
+    def test_generic_expression_function_infers_numeric_arguments(self) -> None:
+        interpreter, _output, _errors = self.run_source(
+            "generic function square(value) = value * value\n"
+            "math_run square(5.5) = ?\n"
+        )
+        self.assertEqual(interpreter.last.value, "30.25")
 
     def test_user_function_in_loop_condition(self) -> None:
         interpreter, _output, _errors = self.run_source(

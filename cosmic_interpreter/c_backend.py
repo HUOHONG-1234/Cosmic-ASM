@@ -96,6 +96,7 @@ _BUILTIN_FUNCTION_NAMES = {
     "matrix_rows", "matrix_cols", "matrix_at", "matrix_mul", "matrix_transpose",
     "matrix2_inverse", "matrix3_inverse", "solve_linear",
     "median", "variance", "correlation", "percentile", "trapz", "simpson",
+    "pi_digits", "pi_str", "e_digits", "e_str", "sqrt2_digits", "sqrt2_str",
 }
 
 
@@ -109,6 +110,7 @@ _C_RUNTIME = r'''
 #include <time.h>
 #include <limits.h>
 #include <errno.h>
+#include <stdatomic.h>
 #ifdef _WIN32
 #include <windows.h>
 #include <process.h>
@@ -172,6 +174,12 @@ static char *copy_text(const char *text) {
     if (!copy) fail_at(0, "out of memory");
     memcpy(copy, text, size);
     return copy;
+}
+
+static void secure_wipe(void *memory, size_t length) {
+    volatile unsigned char *bytes = (volatile unsigned char *)memory;
+    while (length--) *bytes++ = 0;
+    atomic_signal_fence(memory_order_seq_cst);
 }
 
 static unsigned char *copy_bytes(const unsigned char *bytes) {
@@ -1941,6 +1949,115 @@ static char *bigint_to_string(BigInt value, int line) {
     return text;
 }
 
+static BigInt bigint_atan_reciprocal_scaled(
+    int64_t denominator, BigInt scale, int line
+) {
+    BigInt q = bigint_from_int64(denominator, line);
+    BigInt q_squared = bigint_multiply(q, q, line);
+    BigInt power = q;
+    BigInt total = bigint_zero();
+    for (int64_t index = 0; index <= 100000; ++index) {
+        BigInt odd = bigint_from_int64(2 * index + 1, line);
+        BigInt divisor = bigint_multiply(power, odd, line);
+        BigInt remainder;
+        BigInt term = bigint_divide_magnitude(scale, divisor, &remainder, line);
+        if (!term.length) return total;
+        total = index % 2 == 0
+            ? bigint_add(total, term, line)
+            : bigint_subtract(total, term, line);
+        power = bigint_multiply(power, q_squared, line);
+    }
+    fail_at(line, "fixed-point series did not converge");
+    return bigint_zero();
+}
+
+static void cosmic_validate_precision(int64_t precision, int line) {
+    if (precision < 0 || precision > 1000)
+        fail_at(line, "precision must be between 0 and 1000");
+}
+
+static BigInt cosmic_fixed_constant(const char *name, int64_t precision, int line) {
+    cosmic_validate_precision(precision, line);
+    const int64_t guard = 12;
+    BigInt ten = bigint_from_int64(10, line);
+    BigInt scale = bigint_power(
+        ten, bigint_from_int64(precision + guard, line), line
+    );
+    BigInt scaled;
+    if (strcmp(name, "pi") == 0) {
+        scaled = bigint_multiply(
+            bigint_from_int64(16, line),
+            bigint_atan_reciprocal_scaled(5, scale, line), line
+        );
+        BigInt second = bigint_multiply(
+            bigint_from_int64(4, line),
+            bigint_atan_reciprocal_scaled(239, scale, line), line
+        );
+        scaled = bigint_subtract(scaled, second, line);
+    } else if (strcmp(name, "e") == 0) {
+        scaled = scale;
+        BigInt term = scale;
+        for (int64_t divisor = 1; divisor <= precision + guard + 2; ++divisor) {
+            BigInt remainder;
+            term = bigint_divide_magnitude(
+                term, bigint_from_int64(divisor, line), &remainder, line
+            );
+            if (!term.length) break;
+            scaled = bigint_add(scaled, term, line);
+        }
+    } else if (strcmp(name, "sqrt2") == 0) {
+        BigInt radicand = bigint_multiply(
+            bigint_from_int64(2, line), bigint_multiply(scale, scale, line), line
+        );
+        BigInt estimate = bigint_multiply(
+            bigint_from_int64(2, line), scale, line
+        );
+        for (int iteration = 0; iteration < 128; ++iteration) {
+            BigInt remainder;
+            BigInt quotient = bigint_divide_magnitude(
+                radicand, estimate, &remainder, line
+            );
+            BigInt next = bigint_floor_divide(
+                bigint_add(estimate, quotient, line),
+                bigint_from_int64(2, line), line
+            );
+            if (bigint_compare(next, estimate) >= 0) break;
+            estimate = next;
+        }
+        scaled = estimate;
+    } else {
+        fail_at(line, "unknown fixed-point constant");
+        return bigint_zero();
+    }
+    BigInt remainder;
+    return bigint_divide_magnitude(
+        scaled, bigint_power(ten, bigint_from_int64(guard, line), line),
+        &remainder, line
+    );
+}
+
+static char *cosmic_fixed_constant_string(
+    const char *name, int64_t precision, int line
+) {
+    cosmic_validate_precision(precision, line);
+    char *digits = bigint_to_string(cosmic_fixed_constant(name, precision, line), line);
+    if (!precision) return digits;
+    size_t length = strlen(digits);
+    size_t fractional = (size_t)precision;
+    size_t zeros = fractional + 1 > length ? fractional + 1 - length : 0;
+    char *formatted = (char *)malloc(length + zeros + 2);
+    if (!formatted) fail_at(line, "out of memory");
+    size_t offset = 0;
+    for (size_t i = 0; i < zeros; ++i) formatted[offset++] = '0';
+    memcpy(formatted + offset, digits, length + 1);
+    free(digits);
+    length += zeros;
+    memmove(formatted + length - fractional + 1,
+        formatted + length - fractional, fractional + 1);
+    formatted[length - fractional] = '.';
+    return formatted;
+}
+
 static void print_value(const char *value, const char *encoding) {
     if (!value) {
         fputc('\n', stdout);
@@ -2666,7 +2783,9 @@ def _is_string_expression(expression: str) -> bool:
     return (
         isinstance(tree.body, ast.Call)
         and isinstance(tree.body.func, ast.Name)
-        and tree.body.func.id.lower() in {"chr", "char_at", "read_text", "hex"}
+        and tree.body.func.id.lower() in {
+            "chr", "char_at", "read_text", "hex", "pi_str", "e_str", "sqrt2_str",
+        }
     )
 
 
@@ -2764,6 +2883,8 @@ def _is_bigint_result_node(
             return len(node.args) == 1 and not node.keywords and _is_bigint_result_node(
                 node.args[0], parameters, user_functions
             )
+        if name in {"pi_digits", "e_digits", "sqrt2_digits"}:
+            return len(node.args) == 1 and not node.keywords
         if name == "choose":
             return (
                 len(node.args) == 3
@@ -3204,6 +3325,27 @@ def _c_expression(
                 return f"(!({convert(node.operand)}))"
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             function_name = node.func.id.lower()
+            constant_names = {
+                "pi_digits": ("pi", False), "pi_str": ("pi", True),
+                "e_digits": ("e", False), "e_str": ("e", True),
+                "sqrt2_digits": ("sqrt2", False), "sqrt2_str": ("sqrt2", True),
+            }
+            if function_name in constant_names:
+                if not bigint_mode:
+                    raise ValueError(f"{function_name} requires bigint mode")
+                if node.keywords or len(node.args) != 1:
+                    raise ValueError(f"{function_name} expects one precision argument")
+                constant, as_string = constant_names[function_name]
+                precision = (
+                    f"bigint_to_int64({convert(node.args[0])}, {line})"
+                )
+                helper = (
+                    "cosmic_fixed_constant_string" if as_string
+                    else "cosmic_fixed_constant"
+                )
+                return (
+                    f"{helper}({_c_string(constant)}, {precision}, {line})"
+                )
             if bigint_mode and function_name == "abs":
                 if node.keywords or len(node.args) != 1:
                     raise ValueError("abs expects one argument")
@@ -5079,9 +5221,25 @@ class CGenerator:
             return self._generate_print(statement, context, result)
         if kind == "kill":
             index = self.variable_indices[str(statement.data["name"])]
+            wipe = ""
+            if statement.data.get("force"):
+                wipe = (
+                    f"if ({context}->vars[{index}].bytes) {{ "
+                    f"secure_wipe({context}->vars[{index}].bytes, "
+                    f"strlen((const char *){context}->vars[{index}].bytes) + 1); "
+                    f"free({context}->vars[{index}].bytes); "
+                    f"{context}->vars[{index}].bytes = NULL; }} "
+                    f"if ({context}->vars[{index}].array_data) {{ "
+                    f"secure_wipe({context}->vars[{index}].array_data, "
+                    f"{context}->vars[{index}].array_length * "
+                    f"({context}->vars[{index}].array_complex ? "
+                    f"sizeof(double complex) : sizeof(double))); "
+                    f"free({context}->vars[{index}].array_data); "
+                    f"{context}->vars[{index}].array_data = NULL; }}"
+                )
             return [
                 f"if (!{context}->vars[{index}].initialized) set_result(&{result}, STATUS_ERROR, \"error\");",
-                f"else {{ {context}->vars[{index}].killed = 1; set_result(&{result}, STATUS_OK, \"killer\"); }}",
+                f"else {{ {wipe} {context}->vars[{index}].killed = 1; set_result(&{result}, STATUS_OK, \"killer\"); }}",
             ]
         if kind == "if":
             return self._generate_if(statement, context, result, block_mode)

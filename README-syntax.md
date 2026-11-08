@@ -226,6 +226,122 @@ v5 的全部特性都在解释器和 GCC 编译版中同时实现，并由测试
 
 > 密码学示例仅用于验证语言能力，是正确性演示，不是常量时间实现。
 
+## v6：内存回收、内联汇编与支持等级
+
+设计细节见 [docs/v6-gc-asm.md](./docs/v6-gc-asm.md)。这里只列语法。
+
+### 内存回收默认全自动
+
+**不写任何声明就是全自动回收。** 变量赋值计数 +1，作用域退出 −1，归零即释放。没有扫描线程、没有堆大小、没有调优参数。
+
+```cos
+#gc = none    #% 不回收（测内存峰值、基准；不释放≠更快，是更危险）
+#gc = semi    #% 引用计数（默认，等价于不写）
+#gc = mark    #% 标记-清除，用于交叉验证 refcount
+```
+
+- 这三个值是**文件级调试开关，不传染**，不进函数签名、不沿调用链传播。
+- `semi` 是零 STW 暂停的：归零那一刻同步释放。
+
+### 连续分配
+
+每个 `start` 块（含 `if` / `while` 作用域）拥有一个 arena，块内分配线性递增、地址相邻，块退出时整块归还（O(1)）。
+
+- 出块的值通过 `push` 提升到父块 arena，代价是一次 memcpy。
+- 钉住区（`gc_pin`）永不移动，供外部 DLL 持有裸地址。
+- 移动只发生在安全点：块退出、`The_world (force)` 内部；不发生在 DLL 调用期间、`lock` 临界区内、`nuclear_reactor` 链执行期间。
+
+### 手动干预
+
+```cos
+  = The_world (stop)    #% 暂停自动回收，归零对象进入待回收队列
+  = The_world (force)   #% 立即回收队列中计数为零的对象（不动已 pin 的）
+  = The_world (start)   #% 恢复自动回收，并处理积压队列
+```
+
+- 返回值空；`stop` 记深度可嵌套，`start` 减一层，减到零才恢复。
+- 停表深度**不跨块继承**；块退出时未配对会清零并 warning。
+- `#gc = none` 下三者皆空操作；`#gc = mark` 下 `force` 触发一次完整标记-清除。
+- 它管「什么时候扫」，管不了「该不该扫」——判定由引用计数完成。
+
+### `gc_pin` / `gc_unpin`
+
+```cos
+  = gc_pin (buf)
+  cdll = come (winmm) (playsounda) (0) (buf) (0)
+  = gc_unpin (buf)
+```
+
+把缓冲区交给异步外部库（如 `PlaySoundA` 的 `SND_MEMORY`）时必须成对调用，否则函数返回后计数归零、缓冲被释放，声音还在放。`gc_pin` 返回对象本身，可嵌套，`#gc = none` 下是空操作。
+
+### `#pe` 已移除
+
+写 `#pe` 报 `component 'pe' is not supported (removed in v6)`。它自 v1 起从未实现。要解析 PE 用普通字节操作：`bytes head = [0x4D, 0x5A]`。
+
+### 高精度定点常数（bigint）
+
+`#%math = bigint` 模式支持圆周率、自然常数和 √2 的定点表示，精度参数为小数点后的位数，范围是 `0..1000`：
+
+```cos
+#%math = bigint
+math_run pi_digits(40) = ? -bigint
+if up = (ok) goto (push ({pi40} = {(in = up)}))
+print (<{pi40}>)
+
+math_run pi_str(5) = ? -bigint
+if up = (ok) goto (push ({pi5} = {(in = up)}))
+print (<{pi5}>)
+
+math_run e_str(10) = ? -bigint
+if up = (ok) goto (push ({e10} = {(in = up)}))
+print (<{e10}>)
+
+math_run sqrt2_str(10) = ? -bigint
+if up = (ok) goto (push ({sqrt2} = {(in = up)}))
+print (<{sqrt2}>)
+```
+
+- `pi_digits(n)`、`e_digits(n)`、`sqrt2_digits(n)` 返回去掉小数点后的整数，例如 `pi_digits(5)` 为 `314159`。
+- `pi_str(n)`、`e_str(n)`、`sqrt2_str(n)` 返回带小数点的文本，例如 `pi_str(5)` 为 `3.14159`。
+- 两组函数都要在 bigint 数学模式下使用；精度超出范围或不是整数会报错。
+
+### `kill -force`
+
+```cos
+var secret = {"sensitive text"}
+kill {secret} -force
+```
+
+`-force` 是可选的；不带它的 `kill {name}` 只执行通常的变量销毁。GCC 编译版带 `-force` 时，会在释放变量当前持有的字符串或数组存储前覆盖该存储。解释器不保证清零；此选项也不保证清除副本、临时值、寄存器、转储或侧信道中的数据。
+
+### 内联汇编（实验性）
+
+```cos
+#%asm = x86_64 (clobber: rax, rcx, rdi, memory)
+#asm
+{
+    mov rax, 60
+    xor rdi, rdi
+    syscall
+}
+```
+
+- 声明行写注释里，`#asm` 单独一行开标签，后面紧跟 `{ }`。
+- 架构字段必填（v6 只实现 `x86_64`），不匹配即**编译期失败**并给出行号，不做静默降级。
+- `clobber` 必填，`memory` 不能省；空体写 `(clobber: memory)`。
+- 每个 `#asm` 块各写一行声明，不继承。
+- 写成 `#asm = x86_64` 会被当编码声明报错——和 `#math = int64` 同一个坑。
+
+### 支持等级
+
+| 等级 | 涵盖 |
+|---|---|
+| **稳定** | 基本语法、`math_run`、数组/矩阵、位运算、atom、dll、`#gc = semi`、块内连续分配 |
+| **实验性** | `#asm`、`#gc = mark`、`gc_pin` 嵌套语义、压缩触发时机 |
+| **不承诺** | 密码学恒定时间、汇编块优化器行为、全局零碎片、固定内存布局、并发是模拟而非并行 |
+
+---
+
 ## 当前支持的语法
 
 - `#%...`：注释。
@@ -242,6 +358,7 @@ v5 的全部特性都在解释器和 GCC 编译版中同时实现，并由测试
 - `if (条件) { ... } else { ... }`：按数值条件执行分支。
 - `while (条件) { ... }`：循环执行代码块。
 - `function 名称(参数, ...) = 表达式`：定义可递归的数值函数；`choose(条件, 真值, 假值)` 会惰性计算被选中的分支。
+- `generic function 名称(参数, ...) = 表达式`：声明按调用实参数值类型工作的表达式函数；不增加用户类型或任意文本宏。项目脚手架和本地依赖由 `cosp` 命令管理，详见 [cosp 使用说明](./docs/cosp.md)。
 - 数值数组可通过 `array name = [1, 2, 3]` 保存，也可通过 `push ({name} = [1, 2, 3])` 将数组结果保存到变量；变量中的数组按值复制，并可再赋值为字符串。complex mode 支持复数具名数组和数组变量。
 - `read_text(path)` 与 `write_text(path, text)`：以 UTF-8 读写文本，读取最大 16 MiB。
 - `goto (to = stop)`：结束当前执行块；只允许在执行块中使用。
@@ -261,7 +378,7 @@ v5 的全部特性都在解释器和 GCC 编译版中同时实现，并由测试
 - `father` 会复制当前变量和导入到紧随其后的执行块中；块内变量修改不会反向写回父上下文。
 - `dog(status)` 检查最近完成的执行块状态；`dog(名称)` 检查指定名称执行块的状态。
 - `jump` 使用文件中的物理行号（包括空行和注释）；只可跳到当前执行块内直接的普通语句，避免跳入嵌套控制结构。
-- `math` 和 `execute` 是内置组件。`pe` 会被识别，但目前只报告“未实现”，不会假定它有特定功能。
+- `math` 和 `execute` 是内置组件。`pe` 在 v6 起已移除，写入会报编译错误。
 - `#%math = int32`、`#%math = int64`、`#%math = float64`、`#%math = complex`、`#%math = bigint`、`#%math = uint32` 设置数学计算模式；单条表达式可用 `math_run ... = ? -complex` 或其他模式覆盖。`#%math` 每个程序只能声明一次。
 - `#%precision = 17` 将 `float64` 数值结果设为 17 位有效数字（范围 1–17，默认 15）；该设置同时作用于解释器和 GCC 编译结果。它只控制显示精度，不会增加 `double` 的实际计算精度。
 - 数学表达式支持已赋值变量 `{name}`、带引号的字符串字面量 `{"text"}`、括号、`+ - * / // % **`、比较/逻辑运算，以及 `pi`、`e`、`tau` 常数。未知变量引用会报错。

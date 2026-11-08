@@ -10,6 +10,7 @@
 
     <Feature Id="Main" Title="Cosmic ASM" Level="1">
       <ComponentGroupRef Id="ApplicationFiles" />
+      <ComponentRef Id="CosmicEnvironment" />
     </Feature>
 
     <StandardDirectory Id="ProgramFiles64Folder">
@@ -25,6 +26,30 @@
       <Component Id="CosmicCompiler" Guid="*">
         <File Source="$(var.BinaryDirectory)\CosmicCompiler.exe" />
       </Component>
+      <Component Id="Cosp" Guid="*">
+        <File Source="$(var.BinaryDirectory)\cosp.exe" />
+      </Component>
     </ComponentGroup>
+
+    <Component
+      Id="CosmicEnvironment"
+      Directory="INSTALLFOLDER"
+      Guid="B109D1C2-5952-4F60-9D67-7A743C44D64B">
+      <Environment
+        Id="CosmicInstallPath"
+        Name="PATH"
+        Value="[INSTALLFOLDER]"
+        Permanent="no"
+        Part="last"
+        Action="set"
+        System="yes" />
+      <Environment
+        Id="CosmicHome"
+        Name="COSMIC_HOME"
+        Value="[INSTALLFOLDER]"
+        Permanent="no"
+        Action="set"
+        System="yes" />
+    </Component>
   </Fragment>
 </Wix>

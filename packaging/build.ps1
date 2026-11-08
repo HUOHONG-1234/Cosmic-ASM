@@ -18,7 +18,8 @@ New-Item -ItemType Directory -Force -Path $distDirectory, $workDirectory | Out-N
 
 $entryPoints = @(
     @{ Script = "interpreter_entry.py"; Name = "CosmicInterpreter" },
-    @{ Script = "compiler_entry.py"; Name = "CosmicCompiler" }
+    @{ Script = "compiler_entry.py"; Name = "CosmicCompiler" },
+    @{ Script = "cosp_entry.py"; Name = "cosp" }
 )
 
 foreach ($entryPoint in $entryPoints) {
@@ -55,4 +56,5 @@ Copy-Item -LiteralPath $msiPath -Destination $distributionMsi -Force
 Write-Host "Created:"
 Write-Host "  $(Join-Path $distDirectory 'CosmicInterpreter.exe')"
 Write-Host "  $(Join-Path $distDirectory 'CosmicCompiler.exe')"
+Write-Host "  $(Join-Path $distDirectory 'cosp.exe')"
 Write-Host "  $distributionMsi"

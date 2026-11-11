@@ -14,6 +14,7 @@ from cosmic_interpreter.cosp import (
     CospError,
     _default_index_url,
     _download_https_archive,
+    _fetch_https_document,
     _install,
     _main,
     _parse_manifest,
@@ -292,6 +293,11 @@ class CospTests(unittest.TestCase):
             self.assertTrue((installed / "lib.cos").is_file())
             self.assertFalse((installed / "packages").exists())
             self.assertFalse((installed / "other").exists())
+            # 整仓归档只应取出 subdir 内容，不能把仓库其余文件铺进包目录。
+            self.assertEqual(
+                sorted(item.name for item in installed.iterdir()),
+                ["cosp.toml", "lib.cos"],
+            )
 
             lock = json.loads((project / "cosp.lock").read_text(encoding="utf-8"))
             self.assertEqual(lock["packages"]["mathx"]["version"], "1.0.0")
@@ -410,6 +416,70 @@ class CospTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(CospError, "does not match the requested version"):
                     _install(root, manifest)
+
+    def test_transient_http_errors_are_retried(self) -> None:
+        import urllib.error
+
+        payload = b"{}"
+        calls: list[int] = []
+
+        class FakeResponse:
+            def __init__(self, body: bytes) -> None:
+                self._body = body
+                self._read = False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def read(self, _size: int) -> bytes:
+                if self._read:
+                    return b""
+                self._read = True
+                return self._body
+
+            def geturl(self) -> str:
+                return "https://example.test/index.json"
+
+        class FakeOpener:
+            def open(self, _request, timeout: int = 30):
+                calls.append(timeout)
+                if len(calls) < 3:
+                    raise urllib.error.HTTPError(
+                        "https://example.test/index.json", 502, "Bad Gateway", {}, None
+                    )
+                return FakeResponse(payload)
+
+        with patch("cosmic_interpreter.cosp.urllib.request.build_opener", return_value=FakeOpener()), patch(
+            "cosmic_interpreter.cosp.time.sleep"
+        ) as fake_sleep:
+            document = _fetch_https_document(
+                "https://example.test/index.json", limit=1024, label="package index"
+            )
+        self.assertEqual(document, payload)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(fake_sleep.call_count, 2)
+
+    def test_client_errors_are_not_retried(self) -> None:
+        import urllib.error
+
+        calls: list[int] = []
+
+        class FakeOpener:
+            def open(self, _request, timeout: int = 30):
+                calls.append(timeout)
+                raise urllib.error.HTTPError(
+                    "https://example.test/index.json", 404, "Not Found", {}, None
+                )
+
+        with patch("cosmic_interpreter.cosp.urllib.request.build_opener", return_value=FakeOpener()):
+            with self.assertRaisesRegex(CospError, "HTTP Error 404"):
+                _fetch_https_document(
+                    "https://example.test/index.json", limit=1024, label="package index"
+                )
+        self.assertEqual(len(calls), 1)
 
     def test_index_command_lists_packages(self) -> None:
         document = self._index_document(

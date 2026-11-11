@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 import urllib.error
 import urllib.request
@@ -24,6 +25,10 @@ _LOCK = "cosp.lock"
 _MAX_ARCHIVE_MEMBERS = 10000
 _MAX_ARCHIVE_SIZE = 256 * 1024 * 1024
 _MAX_INDEX_SIZE = 4 * 1024 * 1024
+# 网关/限流类瞬时错误重试，避免代理抖动直接失败。
+_RETRY_ATTEMPTS = 3
+_RETRY_STATUS_CODES = frozenset({408, 425, 429, 500, 502, 503, 504})
+_RETRY_DELAY_SECONDS = 0.5
 # 默认远端来源：本项目仓库的索引 JSON 与源码归档。
 _DEFAULT_INDEX_URL = (
     "https://raw.githubusercontent.com/HUOHONG-1234/Cosmic-ASM/main/index.json"
@@ -335,21 +340,31 @@ def _download_https_archive(url: str, destination: Path) -> None:
         raise CospError("remote dependencies must use an HTTPS URL without embedded credentials")
     opener = urllib.request.build_opener(_HTTPSRedirectHandler)
     request = urllib.request.Request(url, headers={"User-Agent": "cosp/1"})
-    total = 0
-    try:
-        with opener.open(request, timeout=30) as response, destination.open("wb") as output:
-            final_url = urlsplit(response.geturl())
-            if final_url.scheme.lower() != "https":
-                raise CospError("remote dependencies must remain on HTTPS")
-            while chunk := response.read(64 * 1024):
-                total += len(chunk)
-                if total > _MAX_ARCHIVE_SIZE:
-                    raise CospError("remote dependency archive exceeds the download limit")
-                output.write(chunk)
-    except CospError:
-        raise
-    except (OSError, urllib.error.URLError) as error:
-        raise CospError(f"cannot download remote dependency: {error}") from error
+    for attempt in range(_RETRY_ATTEMPTS):
+        total = 0
+        try:
+            with opener.open(request, timeout=30) as response, destination.open("wb") as output:
+                final_url = urlsplit(response.geturl())
+                if final_url.scheme.lower() != "https":
+                    raise CospError("remote dependencies must remain on HTTPS")
+                while chunk := response.read(64 * 1024):
+                    total += len(chunk)
+                    if total > _MAX_ARCHIVE_SIZE:
+                        raise CospError("remote dependency archive exceeds the download limit")
+                    output.write(chunk)
+            break
+        except CospError:
+            raise
+        except urllib.error.HTTPError as error:
+            if error.code in _RETRY_STATUS_CODES and attempt + 1 < _RETRY_ATTEMPTS:
+                time.sleep(_RETRY_DELAY_SECONDS * (attempt + 1))
+                continue
+            raise CospError(f"cannot download remote dependency: {error}") from error
+        except (OSError, urllib.error.URLError) as error:
+            if attempt + 1 < _RETRY_ATTEMPTS:
+                time.sleep(_RETRY_DELAY_SECONDS * (attempt + 1))
+                continue
+            raise CospError(f"cannot download remote dependency: {error}") from error
     if not zipfile.is_zipfile(destination):
         raise CospError("remote dependency URL must serve a ZIP archive")
 
@@ -364,23 +379,33 @@ def _fetch_https_document(url: str, *, limit: int, label: str) -> bytes:
         raise CospError(f"{label} must use an HTTPS URL without embedded credentials")
     opener = urllib.request.build_opener(_HTTPSRedirectHandler)
     request = urllib.request.Request(url, headers={"User-Agent": "cosp/1"})
-    total = 0
-    try:
-        with opener.open(request, timeout=30) as response:
-            final_url = urlsplit(response.geturl())
-            if final_url.scheme.lower() != "https":
-                raise CospError(f"{label} must remain on HTTPS")
-            chunks: list[bytes] = []
-            while chunk := response.read(64 * 1024):
-                total += len(chunk)
-                if total > limit:
-                    raise CospError(f"{label} exceeds the download limit")
-                chunks.append(chunk)
-    except CospError:
-        raise
-    except (OSError, urllib.error.URLError) as error:
-        raise CospError(f"cannot download {label}: {error}") from error
-    return b"".join(chunks)
+    for attempt in range(_RETRY_ATTEMPTS):
+        total = 0
+        try:
+            with opener.open(request, timeout=30) as response:
+                final_url = urlsplit(response.geturl())
+                if final_url.scheme.lower() != "https":
+                    raise CospError(f"{label} must remain on HTTPS")
+                chunks: list[bytes] = []
+                while chunk := response.read(64 * 1024):
+                    total += len(chunk)
+                    if total > limit:
+                        raise CospError(f"{label} exceeds the download limit")
+                    chunks.append(chunk)
+            return b"".join(chunks)
+        except CospError:
+            raise
+        except urllib.error.HTTPError as error:
+            if error.code in _RETRY_STATUS_CODES and attempt + 1 < _RETRY_ATTEMPTS:
+                time.sleep(_RETRY_DELAY_SECONDS * (attempt + 1))
+                continue
+            raise CospError(f"cannot download {label}: {error}") from error
+        except (OSError, urllib.error.URLError) as error:
+            if attempt + 1 < _RETRY_ATTEMPTS:
+                time.sleep(_RETRY_DELAY_SECONDS * (attempt + 1))
+                continue
+            raise CospError(f"cannot download {label}: {error}") from error
+    raise CospError(f"cannot download {label}")
 
 
 def _parse_index(document: object, url: str) -> dict[str, object]:
@@ -517,27 +542,28 @@ def _install(root: Path, manifest: dict[str, object], *, refresh: bool = False) 
             if is_directory:
                 shutil.copytree(source, target, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".git", ".cosp", "__pycache__"))
             else:
-                _safe_extract(source, target)
-                entries = list(target.iterdir())
-                if len(entries) == 1 and entries[0].is_dir():
-                    nested = entries[0]
-                    for child in list(nested.iterdir()):
-                        shutil.move(str(child), target / child.name)
-                    nested.rmdir()
+                # 先解到独立目录，再只把目标目录（默认整包，或 subdir 指定的子目录）
+                # 复制进包目录；这样从整仓归档安装时不会把仓库其余内容一起铺进来。
+                extract_root = staged_root / f"{name}.extract"
+                extract_root.mkdir()
+                _safe_extract(source, extract_root)
+                entries = list(extract_root.iterdir())
+                package_source = (
+                    entries[0] if len(entries) == 1 and entries[0].is_dir() else extract_root
+                )
                 if subdir is not None:
-                    parts = PurePosixPath(subdir).parts
-                    nested = target.joinpath(*parts)
-                    if not nested.is_dir():
+                    package_source = package_source.joinpath(*PurePosixPath(subdir).parts)
+                    if not package_source.is_dir():
                         raise CospError(
                             f"dependency '{name}' subdir '{subdir}' is missing from the archive"
                         )
-                    for child in list(nested.iterdir()):
-                        shutil.move(str(child), target / child.name)
-                    top = target / parts[0]
-                    if top != nested and top.exists():
-                        shutil.rmtree(top)
-                    elif nested.exists():
-                        nested.rmdir()
+                shutil.copytree(
+                    package_source,
+                    target,
+                    dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns(".git", ".cosp", "__pycache__"),
+                )
+                shutil.rmtree(extract_root)
             package_manifest_path = target / _MANIFEST
             if package_manifest_path.exists():
                 package_manifest = _parse_manifest(package_manifest_path)

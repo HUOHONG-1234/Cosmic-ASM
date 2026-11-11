@@ -1,0 +1,27 @@
+#% seqkit: integer sequence helpers
+function triangular(n)
+{
+let total = 0
+let index = 1
+while (index <= n)
+{
+set total = total + index
+set index = index + 1
+}
+return total
+}
+function fib(n)
+{
+let previous = 0
+let current = 1
+let index = 0
+let next = 0
+while (index < n)
+{
+set next = previous + current
+set previous = current
+set current = next
+set index = index + 1
+}
+return previous
+}

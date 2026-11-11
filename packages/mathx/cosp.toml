@@ -1,0 +1,12 @@
+[package]
+name = "mathx"
+version = "1.0.0"
+entry = "lib.cos"
+
+[plugin]
+type = "library"
+
+[plugin.exposes]
+twice = "twice"
+square_sum = "square_sum"
+clamp = "clamp"

@@ -1,0 +1,16 @@
+{
+  "index_version": 1,
+  "archive": "https://github.com/HUOHONG-1234/Cosmic-ASM/archive/refs/heads/main.zip",
+  "packages": {
+    "mathx": {
+      "version": "1.0.0",
+      "subdir": "packages/mathx",
+      "description": "Numeric helpers: twice, square_sum, clamp."
+    },
+    "seqkit": {
+      "version": "1.0.0",
+      "subdir": "packages/seqkit",
+      "description": "Integer sequences: triangular, fib."
+    }
+  }
+}

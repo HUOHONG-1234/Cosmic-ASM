@@ -1,33 +1,74 @@
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
   <Package
     Name="Cosmic ASM"
     Manufacturer="Cosmic ASM"
-    Version="0.1.0"
+    Version="$(var.ProductVersion)"
     UpgradeCode="4F923FD7-6BA1-4BCE-9B33-DC8B8AFA65DA"
-    Scope="perMachine">
+    Scope="perMachine"
+    Compressed="yes">
+    <SummaryInformation
+      Description="Cosmic ASM interpreter, native compiler and package manager (MIT License)" />
     <MajorUpgrade DowngradeErrorMessage="A newer version of Cosmic ASM is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
-    <Feature Id="Main" Title="Cosmic ASM" Level="1">
-      <ComponentGroupRef Id="ApplicationFiles" />
+    <!-- 许可证页来自 MIT LICENSE；UI 采用功能树，允许按组件选择安装。 -->
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+    <ui:WixUI Id="WixUI_FeatureTree" />
+
+    <Property Id="ARPCOMMENTS" Value="MIT License. Sources: https://github.com/HUOHONG-1234/Cosmic-ASM" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/HUOHONG-1234/Cosmic-ASM" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <!-- 解释器是必装项；其余可在功能树里取消。 -->
+    <Feature Id="Interpreter" Title="Cosmic ASM interpreter" Level="1" AllowAbsent="no"
+             Description="CosmicInterpreter.exe: runs .cos source files directly.">
+      <ComponentGroupRef Id="InterpreterFiles" />
+    </Feature>
+    <Feature Id="Compiler" Title="Native compiler" Level="1" AllowAbsent="yes"
+             Description="CosmicCompiler.exe: translates .cos to C and invokes GCC. Requires a separate GCC installation.">
+      <ComponentGroupRef Id="CompilerFiles" />
+    </Feature>
+    <Feature Id="Cosp" Title="Package manager (cosp)" Level="1" AllowAbsent="yes"
+             Description="cosp.exe: project scaffolding, dependency install and build/run helpers.">
+      <ComponentGroupRef Id="CospFiles" />
+    </Feature>
+    <Feature Id="Environment" Title="Add to PATH" Level="1" AllowAbsent="yes"
+             Description="Adds the install folder to the system PATH and sets COSMIC_HOME so the tools work from any terminal.">
       <ComponentRef Id="CosmicEnvironment" />
+    </Feature>
+    <Feature Id="Shortcuts" Title="Start menu shortcuts" Level="1" AllowAbsent="yes"
+             Description="Creates a Cosmic ASM folder in the Start menu.">
+      <ComponentRef Id="StartMenuShortcuts" />
     </Feature>
 
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="Cosmic ASM" />
     </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ProgramMenuDir" Name="Cosmic ASM" />
+    </StandardDirectory>
   </Package>
 
   <Fragment>
-    <ComponentGroup Id="ApplicationFiles" Directory="INSTALLFOLDER">
+    <ComponentGroup Id="InterpreterFiles" Directory="INSTALLFOLDER">
       <Component Id="CosmicInterpreter" Guid="*">
-        <File Source="$(var.BinaryDirectory)\CosmicInterpreter.exe" />
+        <File Id="CosmicInterpreterExe" Source="$(var.BinaryDirectory)\CosmicInterpreter.exe" KeyPath="yes" />
       </Component>
+      <Component Id="LicenseFile" Guid="*">
+        <File Id="LicenseTxt" Source="$(var.LicenseText)" Name="LICENSE.txt" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <ComponentGroup Id="CompilerFiles" Directory="INSTALLFOLDER">
       <Component Id="CosmicCompiler" Guid="*">
-        <File Source="$(var.BinaryDirectory)\CosmicCompiler.exe" />
+        <File Id="CosmicCompilerExe" Source="$(var.BinaryDirectory)\CosmicCompiler.exe" KeyPath="yes" />
       </Component>
+    </ComponentGroup>
+
+    <ComponentGroup Id="CospFiles" Directory="INSTALLFOLDER">
       <Component Id="Cosp" Guid="*">
-        <File Source="$(var.BinaryDirectory)\cosp.exe" />
+        <File Id="CospExe" Source="$(var.BinaryDirectory)\cosp.exe" KeyPath="yes" />
       </Component>
     </ComponentGroup>
 
@@ -50,6 +91,21 @@
         Permanent="no"
         Action="set"
         System="yes" />
+      <RegistryValue Root="HKLM" Key="Software\CosmicASM" Name="InstallFolder"
+                     Type="string" Value="[INSTALLFOLDER]" KeyPath="yes" />
+    </Component>
+
+    <!-- 快捷方式组件用 HKCU 键路径（每个安装用户各建一份），满足 ICE38/43/57：
+         ProgramMenuFolder 属用户配置，键路径不能放在 HKLM。 -->
+    <Component Id="StartMenuShortcuts" Directory="ProgramMenuDir"
+               Guid="5C2F3A64-1D0B-4F3C-9A21-7A3C5D9E88B1">
+      <Shortcut Id="InterpreterShortcut" Name="Cosmic ASM Interpreter"
+                Target="[INSTALLFOLDER]CosmicInterpreter.exe" WorkingDirectory="INSTALLFOLDER" />
+      <Shortcut Id="UninstallShortcut" Name="Uninstall Cosmic ASM"
+                Target="[System64Folder]msiexec.exe" Arguments="/x [ProductCode]" />
+      <RemoveFolder Id="RemoveProgramMenuDir" On="uninstall" />
+      <RegistryValue Root="HKCU" Key="Software\CosmicASM" Name="Shortcuts" Type="integer"
+                     Value="1" KeyPath="yes" />
     </Component>
   </Fragment>
 </Wix>

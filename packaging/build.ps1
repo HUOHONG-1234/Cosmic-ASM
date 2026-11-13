@@ -1,9 +1,19 @@
+param(
+    [string]$Version = "0.1.0",
+    [switch]$SkipBinaries
+)
+
 $ErrorActionPreference = "Stop"
 
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $distDirectory = Join-Path $projectRoot "dist"
 $workDirectory = Join-Path $projectRoot "build\pyinstaller"
 $installerProject = Join-Path $PSScriptRoot "CosmicAsm.wixproj"
+$licenseRtf = (Resolve-Path (Join-Path $PSScriptRoot "License.rtf")).Path
+
+if ($Version -notmatch '^\d+\.\d+\.\d+$') {
+    throw "Version must be a numeric MSI version such as 0.1.0 (got '$Version')."
+}
 
 $pyinstaller = Get-Command pyinstaller -ErrorAction SilentlyContinue
 if (-not $pyinstaller) {
@@ -23,6 +33,11 @@ $entryPoints = @(
 )
 
 foreach ($entryPoint in $entryPoints) {
+    $output = Join-Path $distDirectory "$($entryPoint.Name).exe"
+    if ($SkipBinaries -and (Test-Path -LiteralPath $output)) {
+        Write-Host "Reusing existing $output"
+        continue
+    }
     $scriptPath = Join-Path $PSScriptRoot $entryPoint.Script
     & $pyinstaller `
         --noconfirm `
@@ -41,7 +56,10 @@ foreach ($entryPoint in $entryPoints) {
 }
 
 $binaryDirectory = (Resolve-Path $distDirectory).Path
-& dotnet build $installerProject --configuration Release "-p:BinaryDirectory=$binaryDirectory"
+& dotnet build $installerProject --configuration Release `
+    "-p:BinaryDirectory=$binaryDirectory" `
+    "-p:ProductVersion=$Version" `
+    "-p:LicenseRtf=$licenseRtf"
 if ($LASTEXITCODE -ne 0) {
     throw "WiX failed while building the MSI."
 }
@@ -51,7 +69,7 @@ if (-not (Test-Path -LiteralPath $msiPath)) {
     throw "WiX completed without producing the expected MSI: $msiPath"
 }
 
-$distributionMsi = Join-Path $distDirectory "CosmicAsm.msi"
+$distributionMsi = Join-Path $distDirectory "CosmicAsm-$Version.msi"
 Copy-Item -LiteralPath $msiPath -Destination $distributionMsi -Force
 Write-Host "Created:"
 Write-Host "  $(Join-Path $distDirectory 'CosmicInterpreter.exe')"

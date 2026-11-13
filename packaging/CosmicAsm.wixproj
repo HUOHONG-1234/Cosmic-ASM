@@ -2,6 +2,13 @@
   <PropertyGroup>
     <OutputType>Package</OutputType>
     <InstallerPlatform>x64</InstallerPlatform>
-    <DefineConstants>BinaryDirectory=$(BinaryDirectory)</DefineConstants>
+    <BinaryDirectory Condition="'$(BinaryDirectory)' == ''">$(MSBuildThisFileDirectory)..\dist</BinaryDirectory>
+    <LicenseRtf Condition="'$(LicenseRtf)' == ''">$(MSBuildThisFileDirectory)License.rtf</LicenseRtf>
+    <LicenseText Condition="'$(LicenseText)' == ''">$(MSBuildThisFileDirectory)..\LICENSE</LicenseText>
+    <ProductVersion Condition="'$(ProductVersion)' == ''">0.1.0</ProductVersion>
+    <DefineConstants>BinaryDirectory=$(BinaryDirectory);LicenseRtf=$(LicenseRtf);LicenseText=$(LicenseText);ProductVersion=$(ProductVersion)</DefineConstants>
   </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="WixToolset.UI.wixext" Version="4.0.6" />
+  </ItemGroup>
 </Project>

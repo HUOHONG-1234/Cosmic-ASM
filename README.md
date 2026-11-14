@@ -5,13 +5,14 @@
 <img src="Cosmic_logo_for_Markdown-1.svg" alt="Cosmic ASM logo" width="320">
 
 [![Tests](https://img.shields.io/badge/tests-223%20passed-brightgreen)]()
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue)]()
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue)]()
 [![GCC](https://img.shields.io/badge/backend-GCC%20%7C%20C11-orange)]()
 [![Dependencies](https://img.shields.io/badge/dependencies-none-success)]()
 
 Cosmic ASM（简称 COS）是一门自制的编程语言，带一个 Python 编写的**解释器**和一个把 `.cos` 翻译成 C 再用 GCC 编成本地程序的**编译器**。
 
 它的设计目标不是先进，是为初学者提供 C 的环境用于学习
+我不会使用Git,所以我会让Agent代为上传.
 
 ---
 

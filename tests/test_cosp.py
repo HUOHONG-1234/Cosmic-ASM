@@ -481,6 +481,38 @@ class CospTests(unittest.TestCase):
                 )
         self.assertEqual(len(calls), 1)
 
+    def test_manifest_with_utf8_bom_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest_path = root / "cosp.toml"
+            manifest_path.write_text(
+                '[package]\nname = "bomproj"\nversion = "0.1.0"\nentry = "main.cos"\n',
+                encoding="utf-8-sig",
+            )
+            self.assertEqual(manifest_path.read_bytes()[:3], b"\xef\xbb\xbf")
+            manifest = _parse_manifest(manifest_path)
+            self.assertEqual(manifest["package"]["name"], "bomproj")
+
+            (root / "cosp.lock").write_text(
+                json.dumps({"lock_version": 1, "packages": {}}), encoding="utf-8-sig"
+            )
+            lock = _read_lock(root / "cosp.lock")
+        self.assertEqual(lock["packages"], {})
+
+    def test_missing_manifest_reports_actionable_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with self.assertRaisesRegex(
+                CospError,
+                r"cannot find cosp\.toml in .*run 'cosp new <name>' or 'cosp init'",
+            ):
+                _parse_manifest(root / "cosp.toml")
+            buffer = io.StringIO()
+            with patch(
+                "cosmic_interpreter.cosp._project_root", return_value=root
+            ), redirect_stdout(buffer):
+                self.assertEqual(_main(["install"]), 1)
+
     def test_index_command_lists_packages(self) -> None:
         document = self._index_document(
             {"mathx": {"version": "1.0.0", "subdir": "packages/mathx"}}

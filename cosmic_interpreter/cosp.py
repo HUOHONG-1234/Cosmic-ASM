@@ -137,8 +137,17 @@ def _dependency_version(location: str | dict[str, str]) -> str | None:
 def _parse_manifest(path: Path) -> dict[str, object]:
     try:
         raw = path.read_bytes()
-        document = tomllib.loads(raw.decode("utf-8"))
-    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as error:
+    except FileNotFoundError as error:
+        raise CospError(
+            f"cannot find {path.name} in {path.parent}; "
+            "run 'cosp new <name>' or 'cosp init' to create a project here"
+        ) from error
+    except OSError as error:
+        raise CospError(f"cannot read {path}: {error}") from error
+    try:
+        # utf-8-sig：Windows 编辑器常写入 UTF-8 BOM，tomllib 不接受 BOM。
+        document = tomllib.loads(raw.decode("utf-8-sig"))
+    except (UnicodeError, tomllib.TOMLDecodeError) as error:
         raise CospError(f"cannot read {path}: {error}") from error
     package_value = document.get("package")
     dependencies_value = document.get("dependencies", {})
@@ -292,7 +301,7 @@ def _dependency_source(root: Path, value: str) -> tuple[Path, bool]:
 
 def _read_lock(path: Path) -> dict[str, object]:
     try:
-        lock = json.loads(path.read_text(encoding="utf-8"))
+        lock = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise CospError(f"cannot read {_LOCK}: {error}") from error
     if (
@@ -617,7 +626,7 @@ def _render_template(name: str, target: Path, template: str | None) -> None:
         template_root = Path(template).resolve()
         config_path = template_root / "template.json"
         try:
-            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config = json.loads(config_path.read_text(encoding="utf-8-sig"))
             files = config["files"]
         except (OSError, json.JSONDecodeError, KeyError, TypeError) as error:
             raise CospError(f"invalid custom template '{template}': {error}") from error
@@ -631,7 +640,7 @@ def _render_template(name: str, target: Path, template: str | None) -> None:
             source = (template_root / "files" / relative_path).resolve()
             if not source.is_relative_to((template_root / "files").resolve()) or not source.is_file():
                 raise CospError(f"template file is missing or unsafe: {relative}")
-            rendered[relative_path.as_posix()] = source.read_text(encoding="utf-8")
+            rendered[relative_path.as_posix()] = source.read_text(encoding="utf-8-sig")
         files = rendered
     outputs: list[tuple[Path, str]] = []
     for relative, content in files.items():

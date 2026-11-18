@@ -21,17 +21,9 @@
     <Property Id="ARPNOMODIFY" Value="1" />
 
     <!-- 解释器是必装项；其余可在功能树里取消。 -->
-    <Feature Id="Interpreter" Title="Cosmic ASM interpreter" Level="1" AllowAbsent="no"
-             Description="CosmicInterpreter.exe: runs .cos source files directly.">
-      <ComponentGroupRef Id="InterpreterFiles" />
-    </Feature>
-    <Feature Id="Compiler" Title="Native compiler" Level="1" AllowAbsent="yes"
-             Description="CosmicCompiler.exe: translates .cos to C and invokes GCC. Requires a separate GCC installation.">
-      <ComponentGroupRef Id="CompilerFiles" />
-    </Feature>
-    <Feature Id="Cosp" Title="Package manager (cosp)" Level="1" AllowAbsent="yes"
-             Description="cosp.exe: project scaffolding, dependency install and build/run helpers.">
-      <ComponentGroupRef Id="CospFiles" />
+    <Feature Id="Tool" Title="cosmic command line tool" Level="1" AllowAbsent="no"
+             Description="cosmic.exe: one executable for run / build / pkg / index / tui.">
+      <ComponentGroupRef Id="ToolFiles" />
     </Feature>
     <Feature Id="Environment" Title="Add to PATH" Level="1" AllowAbsent="yes"
              Description="Adds the install folder to the system PATH and sets COSMIC_HOME so the tools work from any terminal.">
@@ -51,24 +43,12 @@
   </Package>
 
   <Fragment>
-    <ComponentGroup Id="InterpreterFiles" Directory="INSTALLFOLDER">
-      <Component Id="CosmicInterpreter" Guid="*">
-        <File Id="CosmicInterpreterExe" Source="$(var.BinaryDirectory)\CosmicInterpreter.exe" KeyPath="yes" />
+    <ComponentGroup Id="ToolFiles" Directory="INSTALLFOLDER">
+      <Component Id="CosmicTool" Guid="*">
+        <File Id="CosmicExe" Source="$(var.BinaryDirectory)\cosmic.exe" KeyPath="yes" />
       </Component>
       <Component Id="LicenseFile" Guid="*">
         <File Id="LicenseTxt" Source="$(var.LicenseText)" Name="LICENSE.txt" KeyPath="yes" />
-      </Component>
-    </ComponentGroup>
-
-    <ComponentGroup Id="CompilerFiles" Directory="INSTALLFOLDER">
-      <Component Id="CosmicCompiler" Guid="*">
-        <File Id="CosmicCompilerExe" Source="$(var.BinaryDirectory)\CosmicCompiler.exe" KeyPath="yes" />
-      </Component>
-    </ComponentGroup>
-
-    <ComponentGroup Id="CospFiles" Directory="INSTALLFOLDER">
-      <Component Id="Cosp" Guid="*">
-        <File Id="CospExe" Source="$(var.BinaryDirectory)\cosp.exe" KeyPath="yes" />
       </Component>
     </ComponentGroup>
 
@@ -99,8 +79,8 @@
          ProgramMenuFolder 属用户配置，键路径不能放在 HKLM。 -->
     <Component Id="StartMenuShortcuts" Directory="ProgramMenuDir"
                Guid="5C2F3A64-1D0B-4F3C-9A21-7A3C5D9E88B1">
-      <Shortcut Id="InterpreterShortcut" Name="Cosmic ASM Interpreter"
-                Target="[INSTALLFOLDER]CosmicInterpreter.exe" WorkingDirectory="INSTALLFOLDER" />
+      <Shortcut Id="ToolShortcut" Name="Cosmic ASM"
+                Target="[INSTALLFOLDER]cosmic.exe" WorkingDirectory="INSTALLFOLDER" />
       <Shortcut Id="UninstallShortcut" Name="Uninstall Cosmic ASM"
                 Target="[System64Folder]msiexec.exe" Arguments="/x [ProductCode]" />
       <RemoveFolder Id="RemoveProgramMenuDir" On="uninstall" />

@@ -13,6 +13,28 @@
 python -m cosmic_interpreter.cli 路径\到\程序.cos
 ```
 
+### 编译目标
+
+默认目标为 `host`。可在源文件开头声明交叉编译目标：
+
+```cos
+#%target = riscv64-linux-gnu
+#%target = aarch64-linux-gnu
+```
+
+RISC-V：编译器选择 `riscv64-linux-gnu-gcc`，传入 `-march=rv64gc -mabi=lp64d`。
+ARM64（v8 新增）：选择 `aarch64-linux-gnu-gcc`，传入 `-march=armv8-a`。
+两者都需要先安装对应交叉工具链；没有该工具链时会明确报错，不会回退到本机 GCC。Windows 上走 WSL 转换路径（`--gcc` 可覆盖工具链名）。当前支持集不包含裸机 MCU，也不包含 Windows on ARM。
+
+源文件可用相对路径包含其他 `.cos` 文件，路径相对于声明所在文件。支持单行写法，也兼容其后带 `#include` 标签的两行写法：
+
+```cos
+#%include = "lib/text.cos"
+#include
+```
+
+绝对路径、循环包含及超过 16 层的包含会报错。跨文件重复声明相同的 `#%math` / `#%precision` 时仅保留首次声明；值不同时会报告冲突。
+
 运行仓库附带的示例：
 
 ```powershell
@@ -36,6 +58,55 @@ python -m cosmic_interpreter.cli examples\bubble_sort.cos
 ```powershell
 python -m cosmic_interpreter.cli examples\pi_machin.cos
 ```
+
+### 标准输入
+
+`ask` 从标准输入读取一行并赋给变量；提示文本可选。输入最多保留 4096 个编码后字节，超出部分会被截断并令状态为 `error`。EOF 将变量设为空字符串并令状态为 `error`，空行则是成功输入。
+
+```cos
+ask ({name}) (<{"Name: "}>)
+print (<{name}>)
+```
+
+使用 `--no-input` 可禁用标准输入读取，`ask` 会按 EOF 处理：
+
+```powershell
+python -m cosmic_interpreter.cli 程序.cos --no-input
+python -m cosmic_interpreter.compiler 程序.cos --no-input
+```
+
+### 字符串函数
+
+数学表达式支持以下字符串操作：
+
+```cos
+math_run substr_bytes("Cosmic", 1, 3) = ?  # 字节起点与长度，越界截断
+math_run find("Cosmic ASM", "ASM") = ?     # 字节下标；未找到为 -1
+math_run trim("  Cosmic  ") = ?            # 去除首尾空格、制表符、CR/LF
+math_run upper("Cosmic") = ?               # Unicode 大小写映射
+math_run lower("COSMIC") = ?
+math_run replace("cosmic cosmic", "cosmic", "star") = ?
+```
+
+`substr_bytes` 和 `find` 使用 UTF-8 字节偏移，不是 Unicode 字符下标。截出的字节若不是完整 UTF-8 序列，解释器会以替代字符呈现；编译后的程序保留原始字节。`upper`/`lower` 对每个 Unicode 码点分别执行大小写映射，映射可能展开为多个码点；它不做 locale 敏感转换或上下文相关的希腊终 sigma 处理。编译后端根据编译时 Python 的 Unicode 数据生成映射表。`replace` 替换所有匹配项，空的源字符串会报错。
+
+数值数组还支持 `array_fill(length, value)` 创建填充值数组，以及 `array_copy(array)` 创建独立副本：
+
+```cos
+array values = array_fill(4, 3)
+array duplicate = array_copy(values)
+```
+
+`array_fill` 的长度必须是 0 到 1,000,000 之间的整数；`array_copy` 保留数组元素类型和值，不共享可变存储。
+
+UTF-8 字符串与数值字节数组可显式转换：
+
+```cos
+array encoded = bytes_from_str("宇宙")
+math_run str_from_bytes(encoded) = ?
+```
+
+`bytes_from_str` 返回 UTF-8 字节数组；`str_from_bytes` 要求每个元素是 0..255 的整数，且字节序列必须是有效 UTF-8。由于现有字符串以 NUL 结尾存储，两项转换都拒绝嵌入 NUL。
 
 Unicode 字符与码点互转：
 
@@ -70,7 +141,158 @@ math_run matrix2_det([[1, 2], [3, 4]]) = ?
 math_run matrix2_mul_entry([[1, 2], [3, 4]], [[5, 6], [7, 8]], 1, 0) = ?
 ```
 
-`function name(params) = expression` 定义数值表达式函数；`choose(condition, a, b)` 惰性选择分支，因此可用于递归基线。数值数组索引从 0 开始；用 `array scores = [1, 2, 3]` 声明具名数组，它会在同一上下文的多个 `math_run` 之间保留。`array_set(scores, index, value)` 和 `array_push(scores, value)` 会原地更新具名数组；也可以将它们嵌套在 `array_sum`、`array_at`、统计函数或 `array_len` 等数组操作里。传入列表字面量时，更新结果是临时数组，也可直接保存：`push ({saved} = array_set(scores, 1, 99))`。变量可以保存字符串或数组，数组赋值（例如 `push ({copy} = {saved})`）按值复制；之后可将该变量重新赋值为另一种类型。数组可用 `array_len`、`array_at`、`array_sum`、`dot`、`mean`、`std`、`min`/`max`，v5 起还可用 `median`、`variance`、`correlation`、`percentile`、`trapz`、`simpson`。数组统计目前仅接受实数；在 complex mode 下，具名数组和变量数组可保存复数并用于 `array_len`、`array_at`、`array_sum`、`array_set`、`array_push`、`dot`。`std` 计算总体标准差（`variance` 同样是总体方差），统计函数不接受空数组。执行块通过 `father = up` 继承上下文时，具名数组和变量数组都会复制，子块中的更新不会影响父上下文。数组值不是标量，不能直接作为 `math_run` 结果打印；请用数组函数提取数值。矩阵方面，`matrix2_det` 和 `matrix2_mul_entry` 仍是 2×2 便捷函数，v5 另提供任意 NxM 的 `matrix_rows`/`matrix_cols`/`matrix_at`/`matrix_mul`/`matrix_transpose`、`matrix2_inverse`、`matrix3_inverse` 和 `solve_linear`。
+`function name(params) = expression` 定义数值表达式函数；`choose(condition, a, b)` 惰性选择分支，因此可用于递归基线。也可以写线性的多语句函数，用 `let name = expression` 声明局部数值名，并以 `return expression` 结束：
+
+```cos
+function transform(value)
+{
+    let doubled = value * 2
+    let adjusted = doubled + 3
+    return adjusted
+}
+```
+
+函数体支持按顺序的 `let`（声明局部名）、`set`（给已有局部名或参数赋值）、`return`、`if`/`else`，以及可嵌套的 `while` 循环；`while` 内可用 `break` 和 `continue`。局部名必须写在函数体最外层、任何 `if`/`while` 之前；函数体结束前没有执行到 `return` 时返回 `0`。下面的写法与上面的 `transform` 等价，并演示循环：
+
+```cos
+function gcd(a, b)
+{
+    let x = a
+    let y = b
+    let remainder = 0
+    while (y > 0)
+    {
+        set remainder = x % y
+        set x = y
+        set y = remainder
+    }
+    return x
+}
+```
+
+函数体内还可以声明**嵌套函数**，用单行形式 `function 名称(参数) = 表达式`：
+
+```cos
+function outer(seed)
+{
+    let factor = 2
+    function apply(value) = value * factor + seed
+    return apply(3) + apply(4)
+}
+```
+
+嵌套函数按值捕获外层参数和 `let` 局部名：调用时取当前值的副本，函数内无法写回外层，也不存在函数值、指针或可变引用。因此「捕获」只是把外层当前值当作隐藏实参传入。嵌套函数在函数体内声明即对整个函数体可见（声明被提升），且内部不能再声明嵌套函数。
+
+数值记录（record）与纯表达式运算符重载：
+
+```cos
+record Point { x, y }
+operator + Point = { left.x + right.x, left.y + right.y }
+
+function compute()
+{
+    let a = Point(1, 2)
+    let b = Point(3, 4)
+    let sum = a + b
+    let copy = sum
+    set copy.x = 10
+    return sum.x * 100 + copy.x
+}
+```
+
+可选功能裁剪（默认全开，只减不加）：
+
+```cos
+#%features = no-bigint, no-array, no-matrix
+```
+
+支持的标签只有 `no-bigint`、`no-array`、`no-matrix`（`no-array` 会隐含 `no-matrix`）。被禁用的语言能力在**解析期**就报错，例如 `'array_sum' is not available because feature 'no-array' is disabled`，而不是等到链接期；未知标签同样报错。声明了标签后编译命令会追加 `-ffunction-sections -fdata-sections -Wl,--gc-sections`，让链接器丢弃不可达的运行时函数；此外运行时代码本身按功能域切块：`no-bigint` 用 C 预处理排除 BigInt 与定点常量运行时，`no-array` / `no-matrix` 排除数组统计与矩阵运行时。注意：在 GNU ld 上 `--gc-sections` 已经能丢弃这些不可达函数，实测二进制体积几乎不变，收益主要体现在生成的 C 更短、编译更快，以及没有链接期裁剪的工具链上。这不是裸机级别的运行时最小化。
+
+内存模式（v7）：
+
+```cos
+#%memory = heap             # 默认：每个临时数组单独 malloc/free
+#%memory = arena            # 临时数组从 64 KiB 分块 bump 分配，块退出整块归还
+#%memory = static           # 临时数组从编译期定长池分配，零 malloc
+#%maxlen = 1024             # 数组容量上限（static 模式必填）
+#%on_oom = abort            # 容量超限的默认行为：报错退出
+#%on_oom = error            # 容量超限时置状态为 error，可由 catch / dog 处理
+```
+
+三种模式只改变**临时值**（表达式中间数组、矩阵工作区、`array_push`/`array_copy` 的副本）的存储方式；`Context` 里的变量与具名数组始终用持久 `malloc` 副本，所以模式之间语义完全一致，输出逐字节相同。`arena` / `static` 的临时池在每次整批归还时复位，因此块内分配不会跨块泄漏，但同一个块内的大量分配会一直占用到归还点（`arena` 会用新分块继续增长，`static` 到达池上限会报 `static memory pool is exhausted`）。`#%maxlen` 超限在两种后端一致：`abort` 打印 `array capacity exceeded: #%maxlen is smaller than the declared array` 并以退出码 1 结束；`error` 把语句状态置为 `(error)` 并保留原有数组内容。容量检查作用于 `array` 声明的具名数组；通过 `push` 存进变量的数组不受 `#%maxlen` 限制。
+
+限制（明确报错，不静默降级）：`#%memory = static` 必须同时声明 `#%maxlen`；`gc_pin` 需要 `#%memory = heap`（pin 的缓冲区必须活过块 arena）；`#%memory` 非 `heap` 时不能使用 atom 块（临时池是进程级、非线程安全）。
+
+按需导入：生成 C 时只输出从主程序表达式可达的用户函数（含 `#%include` 进来的库函数），未被调用的库函数不会出现在生成代码里；顶层副作用语句的顺序不受影响。
+
+内存回收控制（v6）：
+
+```cos
+#gc = semi          # 默认：作用域结束时确定释放（none 表示不释放，进程退出统一回收）
+array data = [1, 2, 3]
+gc_pin ({data})     # 固定该数组的运行时缓冲区
+The_world (stop)    # 暂停自动释放，期间只记延迟释放
+The_world (force)   # 立即释放未 pin 的缓冲
+The_world (start)   # 恢复自动释放并处理积压
+```
+
+`#gc = none` 在编译版里让释放函数变成空操作；解释器由宿主语言管理内存，因此 `#gc` 只影响编译版行为，pin/停表状态在解释器侧同样记录（`gc_pin` 要求目标是已声明的数组或 `bytes` 变量）。`#gc = mark` 已支持：这门语言没有指针和别名，标记阶段没有对象图可遍历，因此 `mark` 等价于“所有临时分配都延迟到 `The_world (force)` 或进程退出时统一清扫”，用作 refcount 模式的交叉验证。`The_world (stop)` 可嵌套，`start` 减到零才恢复；执行块结束时若停表深度与进入时不一致，会打印 warning 并恢复进入时的深度（停表不跨块泄漏）。
+
+内存报告与峰值：
+
+```bash
+python -m cosmic_interpreter.compiler program.cos --memory-report report.json
+python -m cosmic_interpreter.compiler program.cos --heap-report
+```
+
+`--memory-report` 写出编译期静态 Context 估算，除记录大小外还包含 `memory_mode`、`maxlen`、`on_oom`、`gc_mode` 与 `static_pool_bytes`。`--heap-report` 编译出的可执行文件在退出时向 stderr 打印 `memory: peak temporary bytes N`，表示自上次整批归还以来的临时分配峰值（`#gc = none` 下即整轮运行的峰值）。
+
+内联汇编（实验性，仅主机目标）：
+
+```cos
+#%asm = x86_64 (clobber: rax, memory)
+#asm
+{
+    nop
+}
+```
+
+`#%asm` 声明行必须紧接 `#asm`，架构只支持 `x86_64` / `arm64`，clobber 列表必填且必须包含 `memory`。架构与当前目标不符时解析期报错；汇编体里出现但 clobber 列表没声明的寄存器会给 warning。解释器无法执行汇编块，会明确报错。汇编内容原样透传给 C 编译器的 `__asm__ volatile`，编译器不保证寄存器分配或指令顺序，也不提供恒定时间保证。
+
+命名空间与别名（只影响函数；记录与运算符仍是全局）：
+
+```cos
+#%namespace = sort
+function quick(values) = values * 2
+#%namespace = global
+#%use = sort.quick as doubled
+
+math_run doubled(4) = ?
+math_run sort::quick(3) = ?
+```
+
+`#%namespace = 名称` 只作用于其后的函数声明，`#%namespace = global`（或 `main`）回到全局；带命名空间的函数内部名字是 `名称__函数`，必须用 `名称::函数(...)` 或 `#%use = 名称.函数 as 别名` 调用，未限定名不会自动搜索命名空间。别名在解析期展开成同名参数的转发函数，因此目标必须存在；别名与已有函数重名、目标不存在都会在解析期报错。
+
+错误处理用 `try` / `catch` / `finally`（仅限顶层语句，至少要有 `catch` 或 `finally` 之一）：
+
+```cos
+try
+{
+    ask ({line})
+}
+catch
+{
+    push ({note} = {"input unavailable"})
+}
+finally
+{
+    push ({cleanup} = {"done"})
+}
+```
+
+`catch` 处理**语言状态机层面的错误**：try 体内某条语句把 `up` 置为 `(error)` 时，try 体余下语句不再执行，转入 `catch`；`catch` 正常结束则状态恢复 `(ok)`。没有 `catch` 时错误在 `finally` 之后继续向上传播（`finally` 自己成功也不会清除该错误）。`finally` 总是执行；`finally` 自身出错时以它的错误为准。硬失败（例如除零、数值越界、递归超限）在两个后端都会直接终止，不会被 `catch` 捕获。
+
+`function` 声明只能写在顶层；块里出现的函数声明会报错，嵌套函数只允许写在函数体内。记录字段只能是数值，按值复制：`let copy = sum` 与 `set copy = sum` 都逐字段复制，改副本不影响原件。字段读写用 `name.field`，只能在函数体内使用（记录值不能存入变量上下文、不能作为函数返回值、不能打印）；构造写作 `Point(...)`，字段个数不匹配、未知字段或把整个记录当标量都会在解析期报错。`operator` 仅支持 `+ - * /`，两侧必须是同类型记录局部名，右侧写出的字段个数必须与记录一致，且只能引用 `left` / `right` 的字段；重载在解析期静态展开成字段运算，没有运行时分派；两侧也可以是 `Point(...)` 构造表达式（会自动生成临时记录局部名）。声明须写在文件顶层、函数定义之前。`return` 之后的同级语句会报 `return must be the final statement in a function`。函数体内暂无数组/矩阵运算、`push` 等副作用语句或外部状态；局部名和参数不会写入调用者的变量上下文，函数体也不能隐式读取调用者变量，需通过参数传入。使用 `--max-loop-iterations` 时，函数体内的 `while` 与执行块循环共享同一上限和报错文案。为避免耗尽解释器或本机栈，用户函数递归深度上限为 256，超过时两种后端均报告 `function recursion depth exceeded`。数值数组索引从 0 开始；用 `array scores = [1, 2, 3]` 声明具名数组，它会在同一上下文的多个 `math_run` 之间保留。`array_set(scores, index, value)` 和 `array_push(scores, value)` 会原地更新具名数组；也可以将它们嵌套在 `array_sum`、`array_at`、统计函数或 `array_len` 等数组操作里。传入列表字面量时，更新结果是临时数组，也可直接保存：`push ({saved} = array_set(scores, 1, 99))`。变量可以保存字符串或数组，数组赋值（例如 `push ({copy} = {saved})`）按值复制；之后可将该变量重新赋值为另一种类型。数组可用 `array_len`、`array_at`、`array_sum`、`dot`、`mean`、`std`、`min`/`max`，v5 起还可用 `median`、`variance`、`correlation`、`percentile`、`trapz`、`simpson`。数组统计目前仅接受实数；在 complex mode 下，具名数组和变量数组可保存复数并用于 `array_len`、`array_at`、`array_sum`、`array_set`、`array_push`、`dot`。`std` 计算总体标准差（`variance` 同样是总体方差），统计函数不接受空数组。执行块通过 `father = up` 继承上下文时，具名数组和变量数组都会复制，子块中的更新不会影响父上下文。数组值不是标量，不能直接作为 `math_run` 结果打印；请用数组函数提取数值。矩阵方面，`matrix2_det` 和 `matrix2_mul_entry` 仍是 2×2 便捷函数，v5 另提供任意 NxM 的 `matrix_rows`/`matrix_cols`/`matrix_at`/`matrix_mul`/`matrix_transpose`、`matrix2_inverse`、`matrix3_inverse` 和 `solve_linear`。
 
 复数使用 `#%math = complex`，可写 `complex(real, imag)`、复数四则运算及 `sqrt`、`sin`、`cos`、`exp`、`log`、`real`、`imag`、`conj`、`cabs`。输出形式为 `实部+虚部i`。`#%math = bigint` 在解释器和 GCC 原生后端中均支持无外部依赖的任意精度整数（上限为 1,000,000 位），包括 `+`、`-`、`*`、`//`、`%`、非负整数 `**`、整数比较和递归函数；BigInt 幂的指数最大为 10,000。
 
@@ -108,26 +330,38 @@ python -m cosmic_interpreter.cli 路径\到\程序.cos --no-external-commands
 
 ## 打包 Windows EXE 和 MSI 安装程序
 
-项目提供一个 PyInstaller 打包脚本，会把解释器和编译器所需的 Python 模块分别捆绑为两个控制台程序，并使用 WiX Toolset 生成 MSI：
+项目提供一个 PyInstaller 打包脚本，会把解释器、编译器和包管理器分别捆绑为控制台程序，并使用 WiX Toolset 生成 MSI：
 
 - `dist\CosmicInterpreter.exe`：运行 `.cos` 源文件。
 - `dist\CosmicCompiler.exe`：翻译为 C 并调用 GCC 编译。
-- `dist\CosmicAsm.msi`：安装上述两个程序到 64 位 Windows 的 `Program Files`。
+- `dist\cosp.exe`：包管理器。
+- `dist\CosmicAsm-<版本>.msi`：安装到 64 位 Windows 的 `Program Files\Cosmic ASM`。
 
 需要 Windows、Python、PyInstaller、.NET SDK 和 GCC。安装 PyInstaller 依赖并运行脚本：
 
 ```powershell
 python -m pip install -r requirements-build.txt
-.\packaging\build.ps1
+.\packaging\build.ps1 -Version 0.1.0
 ```
 
-脚本会通过 .NET SDK 自动还原项目固定的 WiX SDK 版本，因此首次构建需要网络连接和 NuGet 包源。MSI 安装和卸载通常需要管理员权限。安装后的解释器可直接从命令行运行，例如：
+参数说明：`-Version` 写入 MSI 版本与输出文件名（必须是 `x.y.z`）；`-SkipBinaries` 复用 `dist` 里已有的 EXE，只重新链接 MSI，便于只改安装包定义时快速迭代。
+
+安装包特性：
+
+- **许可协议页**：来自 [packaging/License.rtf](./packaging/License.rtf)（MIT，含 PyInstaller 与 GCC 的第三方说明），用户必须接受才能继续。
+- **自定义安装页（功能树）**：解释器为必装项，编译器 / cosp / 加入 PATH / 开始菜单快捷方式可逐个取消；同一份定义也支持 `ADDLOCAL` 静默定制。
+- 安装目录附带 `LICENSE.txt`；「应用和功能」条目写入 MIT 声明与源码地址（`ARPCOMMENTS`、`ARPURLINFOABOUT`）。
+- 升级用固定 `UpgradeCode` + `MajorUpgrade` 处理，卸载会移除注册的 `PATH`/`COSMIC_HOME` 与快捷方式。
+
+脚本会通过 .NET SDK 自动还原固定版本的 WiX SDK 与 `WixToolset.UI.wixext`，因此首次构建需要网络连接和 NuGet 包源。MSI 安装和卸载通常需要管理员权限。安装后的解释器可直接从命令行运行，例如：
 
 ```powershell
 "C:\Program Files\Cosmic ASM\CosmicInterpreter.exe" examples\demo.cos
 ```
 
-`CosmicCompiler.exe` 需要另外安装 GCC，并确保 `gcc` 可从命令行找到；MSI 不包含 GCC。两个 EXE 都是控制台程序，使用方式与上面的 CLI 参数相同。
+`CosmicCompiler.exe` 需要另外安装 GCC，并确保 `gcc` 可从命令行找到；MSI 不包含 GCC。三个 EXE 都是控制台程序，使用方式与上面的 CLI 参数相同。
+
+该脚本已在 Windows + Python 3.13 环境实测跑通：三个 EXE 与 MSI 均可用，MSI 通过 WiX ICE 校验（0 警告 0 错误），`msiexec /a` 解包验证了文件布局（含 `LICENSE.txt`），且 `CosmicCompiler.exe` 编译出的原生程序输出与解释器一致（含 `--heap-report` 峰值行）。
 
 ## v4：并发（atom）与 C DLL
 
@@ -243,13 +477,14 @@ v5 的全部特性都在解释器和 GCC 编译版中同时实现，并由测试
 - 这三个值是**文件级调试开关，不传染**，不进函数签名、不沿调用链传播。
 - `semi` 是零 STW 暂停的：归零那一刻同步释放。
 
-### 连续分配
+### 连续分配（`#%memory = arena` / `static`）
 
-每个 `start` 块（含 `if` / `while` 作用域）拥有一个 arena，块内分配线性递增、地址相邻，块退出时整块归还（O(1)）。
+临时值（表达式中间数组、矩阵工作区、`array_push` / `array_copy` 的副本）在 `arena` 下从 64 KiB 分块线性分配，在 `static` 下从编译期定长池分配；两模式都在整批归还点（数组语句之后、进程退出）复位，回收是 O(1)。
 
-- 出块的值通过 `push` 提升到父块 arena，代价是一次 memcpy。
-- 钉住区（`gc_pin`）永不移动，供外部 DLL 持有裸地址。
-- 移动只发生在安全点：块退出、`The_world (force)` 内部；不发生在 DLL 调用期间、`lock` 临界区内、`nuclear_reactor` 链执行期间。
+- **不移动对象、不做指针提升**：`Context` 中的变量和具名数组始终持有持久 `malloc` 副本，所以跨块引用天然安全，不需要逃逸分析。
+- 因为不移动，`gc_pin` 只在 `#%memory = heap` 下允许；非堆模式下 pin 的缓冲区会在池复位时失效，因此解析期直接报错。
+- 同一个块内的大量临时分配会累积到归还点：`arena` 追加新分块继续增长，`static` 到达池上限会报 `static memory pool is exhausted`。
+- 临时池是进程级的，因此非 `heap` 模式不能使用 atom 块（解析期报错）。
 
 ### 手动干预
 
@@ -272,7 +507,7 @@ v5 的全部特性都在解释器和 GCC 编译版中同时实现，并由测试
   = gc_unpin (buf)
 ```
 
-把缓冲区交给异步外部库（如 `PlaySoundA` 的 `SND_MEMORY`）时必须成对调用，否则函数返回后计数归零、缓冲被释放，声音还在放。`gc_pin` 返回对象本身，可嵌套，`#gc = none` 下是空操作。
+把缓冲区交给异步外部库（如 `PlaySoundA` 的 `SND_MEMORY`）时必须成对调用，否则函数返回后计数归零、缓冲被释放，声音还在放。`gc_pin` 返回对象本身，可嵌套，`#gc = none` 下是空操作；它要求 `#%memory = heap`。
 
 ### `#pe` 已移除
 
@@ -336,9 +571,79 @@ kill {secret} -force
 
 | 等级 | 涵盖 |
 |---|---|
-| **稳定** | 基本语法、`math_run`、数组/矩阵、位运算、atom、dll、`#gc = semi`、块内连续分配 |
-| **实验性** | `#asm`、`#gc = mark`、`gc_pin` 嵌套语义、压缩触发时机 |
+| **稳定** | 基本语法、`math_run`、数组/矩阵、位运算、atom、dll、`#gc = none\|semi\|mark`、`#%memory = heap\|arena\|static` |
+| **实验性** | `#asm`、`#%maxlen` 容量策略、`gc_pin` 嵌套语义、`--heap-report` 峰值口径 |
 | **不承诺** | 密码学恒定时间、汇编块优化器行为、全局零碎片、固定内存布局、并发是模拟而非并行 |
+
+---
+
+## v8：动词优先语法（HOP）
+
+v8 增加一层「动词在前、宾语在后、用 `存` 接目标」的语法糖。**旧写法完全保留**，两种写法可以混用。
+
+```cos
+打开 "log.txt" 存 文本
+行数 文本 存 总行
+查找位置 文本 "错误" 存 位置
+替换文本 文本 里的 "ERROR" 为 "错误" 存 结果
+print (<{总行}>)
+```
+
+规则：
+
+- 目标变量用 `存` 引出：`动词 参数… 存 结果`。结果写进该变量，随后可直接 `print (<{结果}>)`。
+- `打开` / `写入` 的路径与内置 `read_text` / `write_text` 一致，相对**当前工作目录**（不是脚本所在目录）；`#%include` 才是相对脚本目录的。
+- 中文变量名由 HOP 层自动映射成内部 ASCII 名，核心解析器与 C 后端不需要支持中文标识符；报错信息会把内部名还原成你写的中文名。
+- 助词 `里的` / `为` / `到` / `用` / `把` 可写可不写，只为读起来顺。
+- **连续两句 HOP 之间自动插入 `require_ok`**：前一步失败立刻终止，报错带原始行号，不会带着坏数据继续跑。
+
+支持的动词（返回值写在动词名里，不需要猜）：
+
+| 组 | 动词 | 说明 |
+|---|---|---|
+| text | `打开` | 读文本文件，结果为文本 |
+| text | `写入` | 写文本文件（`写入 路径 文本`） |
+| text | `文本长度` | 返回字节数 |
+| text | `查找位置` | 返回字节下标，找不到为 -1 |
+| text | `替换文本` | 返回替换后的新文本 |
+| text | `去空白` / `转大写` / `转小写` | 返回新文本 |
+| text | `截取字节` | `截取字节 文本 起点 长度 存 结果` |
+| text | `行数` | 返回行数（换行数，非空且不以换行结尾时补一行） |
+| array | `数组长度` / `数组求和` / `数组均值` / `取元素` | 数组必须用裸名：`数组求和 数据 存 总量` |
+| array | `追加元素` / `填充` | 生成新数组：`追加元素 数据 5 存 更多` |
+| math | `平方根` `绝对值` `幂` `向下取整` `向上取整` `正弦` `余弦` `对数` | 数值运算 |
+
+HOP 展开后仍是普通语句，因此解释器与 C 后端输出逐字节一致（有专门测试）。
+
+### `require_ok`
+
+```cos
+ask ({输入})
+require_ok 2
+```
+
+前一步状态为 `(error)` 时立即终止，报错形如 `line 3: HOP 第 2 步失败: 前一步状态为 error`。不带步骤号也合法（`require_ok`）。它主要给 HOP 用，也可以手写。
+
+### `line_count`
+
+新增内置：`math_run line_count({文本}) = ? -int64`。空文本为 0；`"a\nb\n"` 为 2。
+
+### 标准库 `lib/`
+
+`lib/` 是随发行版带的数值库，和 `packages/`（cosp 安装的第三方包）分工不同：
+
+```cos
+#%include = "lib/math.cos"
+math_run factorial(5) = ? -int64
+```
+
+`lib/math.cos`（`sq` `cube` `factorial` `max2` `min2` `clamp`）、`lib/text.cos`（按码点判断空白/数字/字母、CJK 宽度）、`lib/term.cos`（ANSI 常量）、`lib/array.cos` 与 `lib/io.cos`（说明文档式，讲清当前后端限制）。详见 [lib/README.md](./lib/README.md)。
+
+**硬约束**：用户函数只能返回数值，字符串结果要直接调用内置函数（例如 `math_run replace(...) = ?`）。
+
+### 解释器热路径
+
+v8 给表达式求值加了「计划缓存」：花括号变换、正则与 AST 只按表达式文本做一次，取值仍每轮读当前变量。实测一个两语句 `while` 循环从 **240 µs/次降到 57.7 µs/次（4.16×）**，语义与错误文案不变。可用 `python scripts/bench_loop.py` 复现。
 
 ---
 
@@ -358,7 +663,16 @@ kill {secret} -force
 - `if (条件) { ... } else { ... }`：按数值条件执行分支。
 - `while (条件) { ... }`：循环执行代码块。
 - `function 名称(参数, ...) = 表达式`：定义可递归的数值函数；`choose(条件, 真值, 假值)` 会惰性计算被选中的分支。
-- `generic function 名称(参数, ...) = 表达式`：声明按调用实参数值类型工作的表达式函数；不增加用户类型或任意文本宏。项目脚手架和本地依赖由 `cosp` 命令管理，详见 [cosp 使用说明](./docs/cosp.md)。
+- `function 名称(参数, ...)` 后接 `{ ... }` 函数体：支持 `let`、`set`、`if`/`else`、`while`、`break`、`continue` 和 `return`，未执行到 `return` 时返回 `0`。
+- 函数体内 `function 名称(参数, ...) = 表达式`：声明按值捕获外层参数/局部名的嵌套函数。
+- `record 名称 { 字段, ... }` 与 `operator + 名称 = { 表达式, ... }`：函数体内可用的值语义数值记录与静态运算符重载。
+- `try { ... } catch { ... } finally { ... }`：顶层错误处理；`catch` / `finally` 至少有一个。
+- `#%namespace = 名称` 与 `#%use = 名称.函数 as 别名`：函数命名空间与解析期别名。
+- `#gc = none|semi|mark`、`gc_pin`/`gc_unpin`、`The_world (stop|force|start)`：编译版内存回收控制；`mark` 是实现为“延迟到 force/退出统一清扫”的交叉验证模式。
+- `#%memory = heap|arena|static`、`#%maxlen = N`、`#%on_oom = abort|error`：临时值存储策略与数组容量上限。
+- `#%features = no-bigint, no-array, no-matrix`：可选功能裁剪，禁用能力在解析期报错。
+- `#%asm = 架构 (clobber: ...)` + `#asm { ... }`：实验性内联汇编，仅主机目标。
+- `generic function 名称(参数, ...) = 表达式`：声明按调用实参数值类型工作的表达式函数；不增加用户类型或任意文本宏。项目脚手架、本地依赖与远端索引包由 `cosp` 命令管理（`cosp add 名称` 默认从本仓库 `index.json` 解析），详见 [cosp 使用说明](./docs/cosp.md)。
 - 数值数组可通过 `array name = [1, 2, 3]` 保存，也可通过 `push ({name} = [1, 2, 3])` 将数组结果保存到变量；变量中的数组按值复制，并可再赋值为字符串。complex mode 支持复数具名数组和数组变量。
 - `read_text(path)` 与 `write_text(path, text)`：以 UTF-8 读写文本，读取最大 16 MiB。
 - `goto (to = stop)`：结束当前执行块；只允许在执行块中使用。

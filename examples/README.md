@@ -47,6 +47,9 @@ dog(main) = {stop}
 | [`sort4.cos`](./sort4.cos) | 排序网络，5 次比较交换 |
 | [`miller_rabin.cos`](./miller_rabin.cos) | 米勒-拉宾素性检验（单基 2） |
 | [`scientific_tape.cos`](./scientific_tape.cos) | 纸带、条件循环 |
+| [`v7_features.cos`](./v7_features.cos) | 多语句函数、`while`/`break`/`continue`、闭包、记录与运算符、命名空间/别名、`try`/`catch`/`finally` |
+
+`v7_features.cos` 在解释器与编译版下输出完全一致（`8318`、`9`、`yes`），可直接当作 v7 语法总览。
 
 `sort4.cos` 用的是**排序网络**而不是循环——因为数组下标在循环里写起来麻烦，固定四变量反而更清楚。
 

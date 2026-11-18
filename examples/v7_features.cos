@@ -1,0 +1,62 @@
+#%math = int64
+#%namespace = geometry
+record Point { x, y }
+operator + Point = { left.x + right.x, left.y + right.y }
+#%namespace = global
+#%use = geometry.manhattan as distance
+
+#%namespace = geometry
+function manhattan(dx, dy)
+{
+    if ({dx} < 0)
+    {
+        set dx = 0 - {dx}
+    }
+    if ({dy} < 0)
+    {
+        set dy = 0 - {dy}
+    }
+    return {dx} + {dy}
+}
+#%namespace = global
+
+function evaluate(seed)
+{
+    let base = Point(seed, 4)
+    let delta = Point(3, 0 - 1)
+    let shifted = base + delta
+    let index = 0
+    let total = 0
+    function weight(value) = value * 2 + seed
+    while (index < 3)
+    {
+        set index = index + 1
+        if (index == 2)
+        {
+            continue
+        }
+        set total = total + weight(index)
+    }
+    return shifted.x * 1000 + shifted.y * 100 + total
+}
+
+try
+{
+    math_run evaluate(5) = ?
+    if up = (ok) goto (push ({score} = {(in = up)}))
+}
+catch
+{
+    push ({score} = {"error"})
+}
+finally
+{
+    push ({done} = {"yes"})
+}
+
+math_run distance(-7, 2) = ?
+if up = (ok) goto (push ({distance} = {(in = up)}))
+
+print (<{score}>)
+print (<{distance}>)
+print (<{done}>)

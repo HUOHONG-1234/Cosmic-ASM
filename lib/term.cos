@@ -1,0 +1,33 @@
+#% lib/term.cos —— 终端/TUI 原语
+#%
+#% Cosmic 的字符串字面量走 JSON 转义，因此用 \u001b 写 ESC（\x1b 会被拒绝）。
+#% var 声明是文本常量，可直接放进 print 的 <{...}>。
+#%
+#% 光标定位等需要拼接数值的序列无法用函数生成（用户函数只能返回数值），
+#% 这类动态序列由 Python 侧 tui.py 负责，cos 侧只暴露静态常量。
+
+#% ESC 前缀，配合 (and) 拼接
+var TERM_ESC = {"\u001b["}
+
+#% 清屏并把光标移到左上角
+var TERM_CLEAR = {"\u001b[2J\u001b[H"}
+
+#% 光标归位
+var TERM_HOME = {"\u001b[H"}
+
+#% 重置所有属性
+var TERM_RESET = {"\u001b[0m"}
+
+#% 加粗 / 反显
+var TERM_BOLD = {"\u001b[1m"}
+var TERM_REVERSE = {"\u001b[7m"}
+
+#% 隐藏 / 显示光标
+var TERM_HIDE_CURSOR = {"\u001b[?25l"}
+var TERM_SHOW_CURSOR = {"\u001b[?25h"}
+
+#% 备用屏幕开关
+var TERM_ALT_SCREEN = {"\u001b[?1049h"}
+var TERM_MAIN_SCREEN = {"\u001b[?1049l"}
+
+#% 256 色前景拼接示例：print (<{TERM_ESC} (and) {"38;5;33m"}>)

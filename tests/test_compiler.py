@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import io
+import json
 import math
 import os
+import platform
 import shutil
 import subprocess
 import tempfile
@@ -9,9 +12,37 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from cosmic_interpreter.compiler import CompileError, compile_source
+from cosmic_interpreter.compiler import CompileError, compile_source, main as compiler_main
 from cosmic_interpreter.c_backend import generate_c
 from cosmic_interpreter.parser import parse
+from cosmic_interpreter.runtime import Interpreter
+from cosmic_interpreter.source_loader import load_source
+
+
+def _wsl_cross_toolchain_ready() -> bool:
+    """Windows 上 wsl.exe 存在并不代表能交叉编译。
+
+    很多 CI runner（例如 windows-latest）有 wsl.exe，却没有装 Ubuntu-22.04
+    发行版或 riscv 工具链，会让该用例失败。这里真实探测一次发行版 + qemu。
+    """
+    if os.name != "nt" or not shutil.which("wsl.exe"):
+        return False
+    try:
+        probe = subprocess.run(
+            [
+                "wsl.exe", "-d", "Ubuntu-22.04", "--", "bash", "-lc",
+                "command -v riscv64-linux-gnu-gcc && command -v qemu-riscv64",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return probe.returncode == 0
 
 
 @unittest.skipUnless(shutil.which("gcc"), "GCC is required for native compiler tests")
@@ -32,6 +63,23 @@ class CompilerTests(unittest.TestCase):
                 timeout=15,
             )
 
+    def test_generated_c_omits_unreachable_user_functions(self) -> None:
+        source = (
+            "function root(value) = helper(value)\n"
+            "function helper(value) = value + 1\n"
+            "function unused(value) = value * 100\n"
+            "math_run root(4) = ?\n"
+            "if up = (ok) goto (push ({result} = {(in = up)}))\n"
+            "print (<{result}>)\n"
+        )
+        generated = generate_c(parse(source))
+        self.assertIn("user_root", generated)
+        self.assertIn("user_helper", generated)
+        self.assertNotIn("user_unused", generated)
+        completed = self.compile_and_run(source)
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(completed.stdout.replace(b"\r\n", b"\n"), b"5\n")
+
     def test_compiled_explicit_and_implicit_string_variables(self) -> None:
         completed = self.compile_and_run(
             'var greeting = {"hello, \\"cosmos\\" {word}"}\n'
@@ -50,10 +98,259 @@ class CompilerTests(unittest.TestCase):
             b'hello, "cosmos" {word}\nliteral {word}\nprefix hello, "cosmos" {word}\n43\n',
         )
 
+    def test_compiled_ask_reads_stdin(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            source_path = directory / "ask.cos"
+            executable_path = directory / "ask.exe"
+            source_path.write_text('ask ({answer}) (<{"Name: "}>)\nprint (<{answer}>)\n', encoding="utf-8")
+            compile_source(source_path, output_path=executable_path)
+            completed = subprocess.run(
+                [str(executable_path)],
+                input=b"Cosmos\n",
+                check=False,
+                capture_output=True,
+                timeout=15,
+            )
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(completed.stdout.replace(b"\r\n", b"\n"), b"Name: Cosmos\n")
+
+    def test_compiled_ask_no_input_flag_does_not_read_stdin(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            source_path = directory / "ask.cos"
+            executable_path = directory / "ask.exe"
+            source_path.write_text("ask ({answer})\n", encoding="utf-8")
+            compile_source(source_path, output_path=executable_path, no_input=True)
+            completed = subprocess.run([str(executable_path)], input=b"ignored\n", capture_output=True, timeout=15)
+        self.assertEqual(completed.returncode, 0)
+
+    def test_compiled_string_library_functions(self) -> None:
+        completed = self.compile_and_run(
+            'math_run substr_bytes("宇宙", 0, 3) = ?\n'
+            "print (<{(in = up)}>)\n"
+            'math_run find("a宇宙b", "宇") = ? -int32\n'
+            "if up = (ok) goto (push ({position} = {(in = up)}))\n"
+            "print (<{position}>)\n"
+            'math_run trim("  Cosmic  ") = ?\n'
+            "print (<{(in = up)}>)\n"
+            'math_run upper("aBc-宇宙") = ?\n'
+            "print (<{(in = up)}>)\n"
+            'math_run lower("AbC-宇宙") = ?\n'
+            "print (<{(in = up)}>)\n"
+            'math_run upper("straße-𐐨") = ?\n'
+            "print (<{(in = up)}>)\n"
+            'math_run lower("İΣ") = ?\n'
+            "print (<{(in = up)}>)\n"
+            'math_run replace("a-b-a", "a", "x") = ?\n'
+            "print (<{(in = up)}>)\n"
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(
+            completed.stdout.replace(b"\r\n", b"\n"),
+            "宇\n1\nCosmic\nABC-宇宙\nabc-宇宙\nSTRASSE-𐐀\ni\u0307σ\nx-b-x\n".encode(),
+        )
+
+    def test_compiler_writes_context_memory_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            source = directory / "memory.cos"
+            executable = directory / "memory.exe"
+            report = directory / "memory.memreport"
+            source.write_text(
+                'var greeting = {"hello"}\n'
+                "array values = [1, 2]\n"
+                "math_run 1 + 1 = ?\n",
+                encoding="utf-8",
+            )
+            compile_source(source, output_path=executable, memory_report_path=report)
+            data = json.loads(report.read_text(encoding="utf-8"))
+            self.assertEqual(data["target"], "host")
+            self.assertEqual(data["pointer_bits"], 64)
+            self.assertEqual(data["variable_count"], 1)
+            self.assertEqual(data["array_count"], 1)
+            self.assertEqual(data["single_context_bytes"], 64 + 48)
+
+    def test_generated_main_context_uses_static_storage(self) -> None:
+        generated = generate_c(parse('var greeting = {"hello"}\n'))
+        self.assertIn("static Context cosmic_main_context;", generated)
+        self.assertIn("Context *context = &cosmic_main_context;", generated)
+        self.assertNotIn("Context storage = {0};", generated)
+
+    def test_unicode_case_tables_are_emitted_on_demand(self) -> None:
+        upper_only = generate_c(parse('math_run upper("a") = ?\n'))
+        lower_only = generate_c(parse('math_run lower("A") = ?\n'))
+        no_case = generate_c(parse("math_run 1 + 1 = ?\n"))
+        self.assertIn("cosmic_case_upper_map", upper_only)
+        self.assertNotIn("cosmic_case_lower_map", upper_only)
+        self.assertIn("cosmic_case_lower_map", lower_only)
+        self.assertNotIn("cosmic_case_upper_map", lower_only)
+        self.assertNotIn("cosmic_case_upper_map", no_case)
+        self.assertNotIn("cosmic_case_lower_map", no_case)
+
+    def test_compiled_array_fill_and_copy(self) -> None:
+        completed = self.compile_and_run(
+            "array values = array_fill(4, 3)\n"
+            "array copy = array_copy(values)\n"
+            "array copy = array_set(copy, 0, 9)\n"
+            "math_run array_sum(values) = ? -int32\n"
+            "if up = (ok) goto (push ({sum} = {(in = up)}))\n"
+            "print (<{sum}>)\n"
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(completed.stdout.replace(b"\r\n", b"\n"), b"12\n")
+
+    def test_compiled_string_and_bytes_conversion(self) -> None:
+        completed = self.compile_and_run(
+            'array data = bytes_from_str("宇宙")\n'
+            "math_run str_from_bytes(data) = ?\n"
+            "print (<{(in = up)}>)\n"
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(completed.stdout.replace(b"\r\n", b"\n"), "宇宙\n".encode())
+
+    def test_compiler_expands_relative_includes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "lib").mkdir()
+            (root / "lib" / "message.cos").write_text(
+                'var message = {"included"}\n', encoding="utf-8"
+            )
+            source_path = root / "main.cos"
+            source_path.write_text(
+                '#%include = "lib/message.cos"\n#include\nprint (<{message}>)\n',
+                encoding="utf-8",
+            )
+            executable_path = root / "main.exe"
+            compile_source(source_path, output_path=executable_path)
+            completed = subprocess.run(
+                [str(executable_path)], capture_output=True, timeout=15
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(completed.stdout.replace(b"\r\n", b"\n"), b"included\n")
+
+    def test_include_loader_rejects_cycles_absolute_paths_and_excess_depth(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "a.cos").write_text('#%include = "b.cos"\n', encoding="utf-8")
+            (root / "b.cos").write_text('#%include = "a.cos"\n', encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "include cycle detected"):
+                load_source(root / "a.cos")
+            (root / "absolute.cos").write_text(
+                '#%include = "C:\\\\Windows\\\\win.ini"\n', encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ValueError, "include path must be relative"):
+                load_source(root / "absolute.cos")
+            for index in range(18):
+                include = f'#%include = "{index + 1}.cos"\n' if index < 17 else ""
+                (root / f"{index}.cos").write_text(include, encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "include depth exceeds 16"):
+                load_source(root / "0.cos")
+
+    def test_riscv_target_selects_linux_cross_compiler_and_abi(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "target.cos"
+            source.write_text("#%target = riscv64-linux-gnu\n", encoding="utf-8")
+            with patch("cosmic_interpreter.compiler.subprocess.run") as run:
+                run.side_effect = [
+                    subprocess.CompletedProcess([], 0, stdout="/mnt/c/target.c\n", stderr=""),
+                    subprocess.CompletedProcess([], 0, stdout="/mnt/c/target\n", stderr=""),
+                    subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+                ]
+                compile_source(source, output_path=root / "target")
+            command = run.call_args_list[-1].args[0]
+            self.assertEqual(len(run.call_args_list), 3)
+            self.assertEqual(command[4], "riscv64-linux-gnu-gcc")
+            self.assertIn("-march=rv64gc", command)
+            self.assertIn("-mabi=lp64d", command)
+
+    @unittest.skipUnless(os.name == "nt", "Windows output naming is required")
+    def test_riscv_default_output_has_no_windows_exe_suffix(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "target.cos"
+            source.write_text("#%target = riscv64-linux-gnu\n", encoding="utf-8")
+            with patch("cosmic_interpreter.compiler.subprocess.run") as run:
+                run.side_effect = [
+                    subprocess.CompletedProcess([], 0, stdout="/mnt/c/target.c\n", stderr=""),
+                    subprocess.CompletedProcess([], 0, stdout="/mnt/c/target\n", stderr=""),
+                    subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+                ]
+                _c_path, executable = compile_source(source)
+            self.assertEqual(executable, source.with_suffix(""))
+
+    @unittest.skipUnless(
+        _wsl_cross_toolchain_ready(),
+        "WSL Ubuntu-22.04 with riscv64-linux-gnu-gcc and qemu-riscv64 is required",
+    )
+    def test_windows_compiler_cross_compiles_riscv_through_wsl(self) -> None:
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent) as temporary:
+            root = Path(temporary)
+            source = root / "riscv.cos"
+            output = root / "riscv-program"
+            source.write_text(
+                '#%target = riscv64-linux-gnu\n'
+                'var greeting = {"hello from WSL"}\n'
+                'print (<{greeting}>)\n',
+                encoding="utf-8",
+            )
+            _c_path, executable = compile_source(
+                source,
+                output_path=output,
+                wsl_distro="Ubuntu-22.04",
+            )
+            path_result = subprocess.run(
+                ["wsl.exe", "-d", "Ubuntu-22.04", "--", "wslpath", "-a", str(executable).replace("\\", "/")],
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=15,
+            )
+            emulated = subprocess.run(
+                [
+                    "wsl.exe", "-d", "Ubuntu-22.04", "--",
+                    "qemu-riscv64", "-L", "/usr/riscv64-linux-gnu",
+                    path_result.stdout.strip(),
+                ],
+                check=False,
+                capture_output=True,
+                timeout=30,
+            )
+        self.assertEqual(emulated.returncode, 0, emulated.stderr.decode(errors="replace"))
+        self.assertEqual(emulated.stdout.replace(b"\r\n", b"\n"), b"hello from WSL\n")
+
+    def test_includes_merge_identical_global_directives_and_reject_conflicts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "math.cos").write_text("#%math = float64\n", encoding="utf-8")
+            source = root / "main.cos"
+            source.write_text(
+                '#%include = "math.cos"\n#%math = float64\nmath_run 1 + 1 = ?\n',
+                encoding="utf-8",
+            )
+            self.assertEqual(load_source(source).count("#%math"), 1)
+            source.write_text(
+                '#%include = "math.cos"\n#%math = bigint\n', encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ValueError, "conflicting #%math declaration"):
+                load_source(source)
+
     def test_compiler_rejects_uninitialized_braced_variable_reference(self) -> None:
         completed = self.compile_and_run("math_run {missing} + 1 = ?\n")
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn(b"numeric variable is empty or killed", completed.stderr)
+
+    def test_compiler_rejects_removed_pe_component(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source_path = Path(temporary_directory) / "removed_pe.cos"
+            source_path.write_text("#pe\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                CompileError,
+                r"line 1: component 'pe' is not supported \(removed in v6\)",
+            ):
+                compile_source(source_path)
 
     def test_compiled_duplicate_variable_declaration_fails(self) -> None:
         completed = self.compile_and_run(
@@ -428,6 +725,674 @@ start(normal) = {math}
         )
         self.assertEqual(completed.returncode, 0)
         self.assertEqual(completed.stdout.strip(), b"3628800")
+
+    def test_compiled_recursive_expression_function_reports_depth_error(self) -> None:
+        completed = self.compile_and_run(
+            "function descend(n) = choose(n <= 0, 0, descend(n - 1))\n"
+            "math_run descend(300) = ?\n"
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn(b"function recursion depth exceeded", completed.stderr)
+
+    def test_compiled_multi_statement_function_with_locals_and_return(self) -> None:
+        completed = self.compile_and_run(
+            "function transform(value)\n"
+            "{\n"
+            "let doubled = {value} * 2\n"
+            "let adjusted = {doubled} + 3\n"
+            "return {adjusted}\n"
+            "}\n"
+            "math_run transform(5) = ? -int64\n"
+            "if up = (ok) goto (push ({answer} = {(in = up)}))\n"
+            "print (<{answer}>)\n"
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(completed.stdout.strip(), b"13")
+
+    def test_compiled_multi_statement_function_can_recurse(self) -> None:
+        completed = self.compile_and_run(
+            "function factorial(n)\n"
+            "{\n"
+            "let previous = {n} - 1\n"
+            "return choose({n} <= 1, 1, {n} * factorial({previous}))\n"
+            "}\n"
+            "math_run factorial(10) = ? -int64\n"
+            "if up = (ok) goto (push ({answer} = {(in = up)}))\n"
+            "print (<{answer}>)\n"
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(completed.stdout.strip(), b"3628800")
+
+    def test_compiled_multi_statement_function_conditional_returns(self) -> None:
+        completed = self.compile_and_run(
+            "function absolute(value)\n"
+            "{\n"
+            "if ({value} < 0)\n"
+            "{\n"
+            "let negated = 0 - {value}\n"
+            "return {negated}\n"
+            "}\n"
+            "else\n"
+            "{\n"
+            "let unchanged = {value}\n"
+            "return {unchanged}\n"
+            "}\n"
+            "}\n"
+            "math_run absolute(-12) = ? -int64\n"
+            "if up = (ok) goto (push ({answer} = {(in = up)}))\n"
+            "print (<{answer}>)\n"
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(completed.stdout.strip(), b"12")
+
+    def test_compiled_multi_statement_function_supports_nested_conditional_returns(self) -> None:
+        completed = self.compile_and_run(
+            "function classify(value)\n"
+            "{\n"
+            "if ({value} < 0)\n"
+            "{\n"
+            "return -1\n"
+            "}\n"
+            "else\n"
+            "{\n"
+            "if ({value} == 0)\n"
+            "{\n"
+            "return 0\n"
+            "}\n"
+            "else\n"
+            "{\n"
+            "return 1\n"
+            "}\n"
+            "}\n"
+            "}\n"
+            "math_run classify(0) = ? -int64\n"
+            "if up = (ok) goto (push ({answer} = {(in = up)}))\n"
+            "print (<{answer}>)\n"
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(completed.stdout.strip(), b"0")
+
+    def test_compiled_function_body_with_while_loop(self) -> None:
+        completed = self.compile_and_run(
+            "function gcd(a, b)\n"
+            "{\n"
+            "let x = {a}\n"
+            "let y = {b}\n"
+            "let remainder = 0\n"
+            "while ({y} > 0)\n"
+            "{\n"
+            "set remainder = {x} % {y}\n"
+            "set x = {y}\n"
+            "set y = {remainder}\n"
+            "}\n"
+            "return {x}\n"
+            "}\n"
+            "math_run gcd(1071, 462) = ? -int32\n"
+            "if up = (ok) goto (push ({answer} = {(in = up)}))\n"
+            "print (<{answer}>)\n"
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(completed.stdout.strip(), b"21")
+
+    def test_compiled_function_body_with_continue_break_and_early_return(self) -> None:
+        completed = self.compile_and_run(
+            "function sum_odd(limit)\n"
+            "{\n"
+            "let total = 0\n"
+            "let index = 0\n"
+            "while ({index} < {limit})\n"
+            "{\n"
+            "set index = {index} + 1\n"
+            "if ({index} % 2 == 0)\n"
+            "{\n"
+            "continue\n"
+            "}\n"
+            "if ({total} > 100)\n"
+            "{\n"
+            "break\n"
+            "}\n"
+            "set total = {total} + {index}\n"
+            "}\n"
+            "return {total}\n"
+            "}\n"
+            "math_run sum_odd(10) = ? -int64\n"
+            "if up = (ok) goto (push ({answer} = {(in = up)}))\n"
+            "print (<{answer}>)\n"
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(completed.stdout.strip(), b"25")
+        early = self.compile_and_run(
+            "function first_multiple(start)\n"
+            "{\n"
+            "let value = {start}\n"
+            "while (1 == 1)\n"
+            "{\n"
+            "if ({value} % 7 == 0)\n"
+            "{\n"
+            "return {value}\n"
+            "}\n"
+            "set value = {value} + 1\n"
+            "}\n"
+            "return -1\n"
+            "}\n"
+            "math_run first_multiple(10) = ? -int64\n"
+            "if up = (ok) goto (push ({answer} = {(in = up)}))\n"
+            "print (<{answer}>)\n"
+        )
+        self.assertEqual(early.returncode, 0, early.stderr.decode(errors="replace"))
+        self.assertEqual(early.stdout.strip(), b"14")
+
+    def test_compiled_function_body_falls_through_to_zero(self) -> None:
+        completed = self.compile_and_run(
+            "function positive_only(value)\n"
+            "{\n"
+            "if ({value} > 0)\n"
+            "{\n"
+            "return {value}\n"
+            "}\n"
+            "}\n"
+            "math_run positive_only(-5) = ? -int64\n"
+            "if up = (ok) goto (push ({answer} = {(in = up)}))\n"
+            "print (<{answer}>)\n"
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(completed.stdout.strip(), b"0")
+
+    def test_compiled_bigint_function_body_with_loop(self) -> None:
+        completed = self.compile_and_run(
+            "#%math = bigint\n"
+            "function factorial(n)\n"
+            "{\n"
+            "let result = 1\n"
+            "let index = 1\n"
+            "while ({index} <= {n})\n"
+            "{\n"
+            "set result = {result} * {index}\n"
+            "set index = {index} + 1\n"
+            "}\n"
+            "return {result}\n"
+            "}\n"
+            "math_run factorial(25) = ?\n"
+            "if up = (ok) goto (push ({answer} = {(in = up)}))\n"
+            "print (<{answer}>)\n"
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(
+            completed.stdout.strip(), b"15511210043330985984000000"
+        )
+
+    def test_compiled_uint32_function_body_uses_wrapping_math(self) -> None:
+        completed = self.compile_and_run(
+            "#%math = uint32\n"
+            "function rotate(value)\n"
+            "{\n"
+            "let result = {value}\n"
+            "set result = ({result} << 1) | ({result} >> 7)\n"
+            "return {result}\n"
+            "}\n"
+            "math_run rotate(200) = ?\n"
+            "if up = (ok) goto (push ({answer} = {(in = up)}))\n"
+            "print (<{answer}>)\n"
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(completed.stdout.strip(), b"401")
+
+    def test_compiled_function_body_respects_loop_iteration_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            source_path = directory / "program.cos"
+            executable_path = directory / "program.exe"
+            source_path.write_text(
+                "function spin()\n"
+                "{\n"
+                "let count = 0\n"
+                "while (1 == 1)\n"
+                "{\n"
+                "set count = {count} + 1\n"
+                "}\n"
+                "return {count}\n"
+                "}\n"
+                "math_run spin() = ? -int64\n",
+                encoding="utf-8",
+            )
+            c_path, output_path = compile_source(
+                source_path, output_path=executable_path, max_loop_iterations=5
+            )
+            completed = subprocess.run(
+                [str(output_path)], check=False, capture_output=True, timeout=15
+            )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn(b"loop iteration limit exceeded", completed.stderr)
+
+    def test_generated_c_with_statement_function_uses_goto_exit_label(self) -> None:
+        generated = generate_c(
+            parse(
+                "function pick(value)\n"
+                "{\n"
+                "if ({value} > 0)\n"
+                "{\n"
+                "return 1\n"
+                "}\n"
+                "return 0\n"
+                "}\n"
+                "math_run pick(3) = ? -int64\n"
+            )
+        )
+        self.assertIn("static double user_pick(double param_value)", generated)
+        self.assertIn("goto cosmic_function_exit_pick;", generated)
+        self.assertIn("cosmic_function_exit_pick:", generated)
+        self.assertIn("++cosmic_function_depth;", generated)
+        self.assertIn("--cosmic_function_depth;", generated)
+
+    def test_compiled_nested_function_capture_parity(self) -> None:
+        source = (
+            "function outer(seed)\n"
+            "{\n"
+            "let factor = 2\n"
+            "function apply(value) = value * factor + seed\n"
+            "let first = apply(3)\n"
+            "set factor = 10\n"
+            "let second = apply(3)\n"
+            "return first * 100 + second\n"
+            "}\n"
+            "math_run outer(5) = ? -int64\n"
+            "if up = (ok) goto (push ({answer} = {(in = up)}))\n"
+            "print (<{answer}>)\n"
+        )
+        completed = self.compile_and_run(source)
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(completed.stdout.strip(), b"1135")
+        generated = generate_c(parse(source))
+        self.assertIn("user_outer__apply", generated)
+        self.assertIn("captured_factor", generated)
+
+    def test_compiled_record_values_and_operators(self) -> None:
+        source = (
+            "record Point { x, y }\n"
+            "operator + Point = { left.x + right.x, left.y + right.y }\n"
+            "function compute()\n"
+            "{\n"
+            "let a = Point(1, 2)\n"
+            "let b = Point(3, 4)\n"
+            "let sum = a + b\n"
+            "let copy = sum\n"
+            "set copy.y = 100\n"
+            "return sum.y * 1000 + copy.y\n"
+            "}\n"
+            "math_run compute() = ? -int64\n"
+            "if up = (ok) goto (push ({answer} = {(in = up)}))\n"
+            "print (<{answer}>)\n"
+        )
+        completed = self.compile_and_run(source)
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(completed.stdout.strip(), b"6100")
+        generated = generate_c(parse(source))
+        self.assertIn("local_sum__x", generated)
+        self.assertIn("local_copy__y", generated)
+
+    def test_compiled_try_catch_finally_matches_interpreter(self) -> None:
+        source = (
+            "try\n"
+            "{\n"
+            "ask ({line})\n"
+            "push ({after_ask} = {\"continued\"})\n"
+            "}\n"
+            "catch\n"
+            "{\n"
+            "push ({caught} = {\"caught\"})\n"
+            "}\n"
+            "finally\n"
+            "{\n"
+            "push ({cleanup} = {\"done\"})\n"
+            "}\n"
+            "print (<{caught}>)\n"
+            "print (<{cleanup}>)\n"
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            source_path = directory / "program.cos"
+            executable_path = directory / "program.exe"
+            source_path.write_text(source, encoding="utf-8")
+            _c_path, output_path = compile_source(
+                source_path, output_path=executable_path, no_input=True
+            )
+            completed = subprocess.run(
+                [str(output_path)],
+                check=False,
+                capture_output=True,
+                timeout=15,
+                stdin=subprocess.DEVNULL,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(
+            completed.stdout.replace(b"\r\n", b"\n"), b"caught\ndone\n"
+        )
+
+    def test_compiled_try_without_catch_keeps_error_status_after_finally(self) -> None:
+        source = (
+            "try\n"
+            "{\n"
+            "ask ({line})\n"
+            "}\n"
+            "finally\n"
+            "{\n"
+            "push ({cleanup} = {\"done\"})\n"
+            "}\n"
+            "if up = (error) goto (push ({failed} = {\"error\"}))\n"
+            "print (<{cleanup}>)\n"
+            "print (<{failed}>)\n"
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            source_path = directory / "program.cos"
+            executable_path = directory / "program.exe"
+            source_path.write_text(source, encoding="utf-8")
+            _c_path, output_path = compile_source(
+                source_path, output_path=executable_path, no_input=True
+            )
+            completed = subprocess.run(
+                [str(output_path)],
+                check=False,
+                capture_output=True,
+                timeout=15,
+                stdin=subprocess.DEVNULL,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(
+            completed.stdout.replace(b"\r\n", b"\n"), b"done\nerror\n"
+        )
+
+    def test_compiled_namespaces_and_aliases(self) -> None:
+        completed = self.compile_and_run(
+            "#%namespace = sort\n"
+            "function quick(values) = values * 2\n"
+            "#%namespace = mathx\n"
+            "function quick(values) = values * 10\n"
+            "#%namespace = global\n"
+            "#%use = sort.quick as doubled\n"
+            "math_run doubled(4) = ? -int64\n"
+            "if up = (ok) goto (push ({a} = {(in = up)}))\n"
+            "math_run mathx::quick(3) = ? -int64\n"
+            "if up = (ok) goto (push ({b} = {(in = up)}))\n"
+            "print (<{a}>)\n"
+            "print (<{b}>)\n"
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(completed.stdout.replace(b"\r\n", b"\n"), b"8\n30\n")
+
+    def test_compiled_gc_pin_and_the_world(self) -> None:
+        completed = self.compile_and_run(
+            "#gc = semi\n"
+            "array data = [1, 2, 3]\n"
+            "gc_pin ({data})\n"
+            "The_world (stop)\n"
+            "math_run array_sum(data) = ? -int64\n"
+            "if up = (ok) goto (push ({total} = {(in = up)}))\n"
+            "The_world (force)\n"
+            "The_world (start)\n"
+            "print (<{total}>)\n"
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(completed.stdout.strip(), b"6")
+
+    def test_compiled_gc_none_disables_release(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            source_path = directory / "program.cos"
+            executable_path = directory / "program.exe"
+            source_path.write_text(
+                "#gc = none\n"
+                "array data = [4, 5, 6]\n"
+                "math_run array_sum(data) = ? -int64\n"
+                "if up = (ok) goto (push ({total} = {(in = up)}))\n"
+                "print (<{total}>)\n",
+                encoding="utf-8",
+            )
+            c_path, output_path = compile_source(source_path, output_path=executable_path)
+            generated = c_path.read_text(encoding="utf-8")
+            completed = subprocess.run(
+                [str(output_path)], check=False, capture_output=True, timeout=15
+            )
+        self.assertIn("#define COSMIC_GC_NONE 1", generated)
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(completed.stdout.strip(), b"15")
+
+    def test_compiled_inline_assembly_runs(self) -> None:
+        if platform.machine().lower() not in {"amd64", "x86_64", "x64"}:
+            self.skipTest("x86_64 inline assembly requires an x86_64 host")
+        completed = self.compile_and_run(
+            "#%asm = x86_64 (clobber: rax, memory)\n"
+            "#asm\n"
+            "{\n"
+            "    nop\n"
+            "}\n"
+            "math_run 1 + 1 = ? -int32\n"
+            "if up = (ok) goto (push ({answer} = {(in = up)}))\n"
+            "print (<{answer}>)\n"
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(completed.stdout.strip(), b"2")
+
+    def test_compiled_included_library_prunes_unused_functions(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            library = directory / "lib" / "mathx.cos"
+            library.parent.mkdir()
+            library.write_text(
+                "function used(value) = value * 2\n"
+                "function unused(value) = value * 100\n",
+                encoding="utf-8",
+            )
+            source_path = directory / "program.cos"
+            executable_path = directory / "program.exe"
+            source_path.write_text(
+                '#%include = "lib/mathx.cos"\n'
+                "math_run used(21) = ? -int32\n"
+                "if up = (ok) goto (push ({answer} = {(in = up)}))\n"
+                "print (<{answer}>)\n",
+                encoding="utf-8",
+            )
+            c_path, output_path = compile_source(
+                source_path, output_path=executable_path
+            )
+            generated = c_path.read_text(encoding="utf-8")
+            completed = subprocess.run(
+                [str(output_path)], check=False, capture_output=True, timeout=15
+            )
+        self.assertIn("user_used", generated)
+        self.assertNotIn("user_unused", generated)
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(completed.stdout.strip(), b"42")
+
+    def test_feature_flags_gate_language_surface(self) -> None:
+        with self.assertRaisesRegex(Exception, "not available because feature 'no-array'"):
+            parse("#%features = no-array\nmath_run array_sum([1, 2]) = ?\n")
+        with self.assertRaisesRegex(Exception, "unknown feature tag"):
+            parse("#%features = no-string\n")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            source_path = directory / "program.cos"
+            executable_path = directory / "program.exe"
+            source_path.write_text(
+                "#%features = no-array, no-bigint, no-matrix\n"
+                "math_run 1 + 1 = ? -int32\n"
+                "if up = (ok) goto (push ({answer} = {(in = up)}))\n"
+                "print (<{answer}>)\n",
+                encoding="utf-8",
+            )
+            c_path, output_path = compile_source(
+                source_path, output_path=executable_path
+            )
+            generated = c_path.read_text(encoding="utf-8")
+            completed = subprocess.run(
+                [str(output_path)], check=False, capture_output=True, timeout=15
+            )
+        self.assertIn("#define COSMIC_FEATURE_BIGINT 0", generated)
+        self.assertIn("#if COSMIC_FEATURE_BIGINT", generated)
+        self.assertIn("#define COSMIC_FEATURE_ARRAY 0", generated)
+        self.assertIn("#define COSMIC_FEATURE_MATRIX 0", generated)
+        self.assertIn("#if COSMIC_FEATURE_ARRAY\nstatic double cosmic_array_mean(", generated)
+        self.assertIn("#if COSMIC_FEATURE_MATRIX\nstatic CosmicMatrix cosmic_matrix(", generated)
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(completed.stdout.strip(), b"2")
+
+    def test_memory_modes_and_gc_mark_keep_identical_output(self) -> None:
+        body = (
+            "#%math = int64\n"
+            'var greeting = {"hello"}\n'
+            "function twice(value) = value * 2\n"
+            "array data = [1, 2, 3, 4]\n"
+            "math_run twice(array_sum(data)) = ? -int64\n"
+            "if up = (ok) goto (push ({total} = {(in = up)}))\n"
+            "array more = array_push(data, 5)\n"
+            "math_run array_sum(more) + array_len(more) = ? -int64\n"
+            "if up = (ok) goto (push ({sum} = {(in = up)}))\n"
+            "print (<{greeting}>)\n"
+            "print (<{total}>)\n"
+            "print (<{sum}>)\n"
+        )
+        cases = {
+            "heap": "",
+            "arena": "#%memory = arena\n",
+            "static": "#%memory = static\n#%maxlen = 16\n",
+            "mark": "#gc = mark\n",
+            "mark-arena": "#gc = mark\n#%memory = arena\n",
+        }
+        for name, prefix in cases.items():
+            with self.subTest(mode=name):
+                completed = self.compile_and_run(prefix + body)
+                self.assertEqual(
+                    completed.returncode, 0, completed.stderr.decode(errors="replace")
+                )
+                self.assertEqual(
+                    completed.stdout.replace(b"\r\n", b"\n"), b"hello\n20\n20\n"
+                )
+
+    def test_maxlen_capacity_aborts_or_reports_error(self) -> None:
+        aborting = self.compile_and_run(
+            "#%maxlen = 2\narray data = [1, 2, 3]\n"
+            "math_run array_len(data) = ? -int32\n"
+        )
+        self.assertEqual(aborting.returncode, 1)
+        self.assertIn(b"array capacity exceeded", aborting.stderr)
+
+        recovering = self.compile_and_run(
+            "#%maxlen = 2\n#%on_oom = error\n"
+            "array data = [1, 2, 3]\n"
+            'if up = (error) goto (push ({state} = {"oom"}))\n'
+            "print (<{state}>)\n"
+        )
+        self.assertEqual(
+            recovering.returncode, 0, recovering.stderr.decode(errors="replace")
+        )
+        self.assertEqual(recovering.stdout.replace(b"\r\n", b"\n"), b"oom\n")
+
+    def test_heap_report_prints_peak_temporary_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            source_path = directory / "program.cos"
+            executable_path = directory / "program.exe"
+            source_path.write_text(
+                "#%math = int64\n"
+                "array data = array_fill(1000, 2)\n"
+                "array more = array_push(data, 3)\n"
+                "math_run array_sum(more) = ? -int64\n"
+                "if up = (ok) goto (push ({total} = {(in = up)}))\n"
+                "print (<{total}>)\n",
+                encoding="utf-8",
+            )
+            c_path, output_path = compile_source(
+                source_path, output_path=executable_path, report_heap=True
+            )
+            generated = c_path.read_text(encoding="utf-8")
+            completed = subprocess.run(
+                [str(output_path)], check=False, capture_output=True, timeout=15
+            )
+        self.assertIn("#define COSMIC_REPORT_HEAP 1", generated)
+        self.assertEqual(
+            completed.returncode, 0, completed.stderr.decode(errors="replace")
+        )
+        self.assertEqual(completed.stdout.strip(), b"2003")
+        self.assertRegex(
+            completed.stderr.decode(errors="replace"),
+            r"memory: peak temporary bytes [1-9]\d*",
+        )
+
+    def test_reachable_pruning_keeps_functions_called_inside_try_and_blocks(self) -> None:
+        completed = self.compile_and_run(
+            "function twice(value) = value * 2\n"
+            "start(normal) = {compute}\n"
+            "{\n"
+            "math_run twice(3) = ? -int32\n"
+            "if up = (ok) goto (push ({blocked} = {(in = up)}))\n"
+            "}\n"
+            "try\n"
+            "{\n"
+            "math_run twice(5) = ? -int32\n"
+            "if up = (ok) goto (push ({guarded} = {(in = up)}))\n"
+            "}\n"
+            "finally\n"
+            "{\n"
+            "push ({done} = {\"yes\"})\n"
+            "}\n"
+            "print (<{guarded}>)\n"
+            "print (<{done}>)\n"
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(completed.stdout.replace(b"\r\n", b"\n"), b"10\nyes\n")
+
+    def test_compiled_nested_function_inside_while(self) -> None:
+        completed = self.compile_and_run(
+            "function outer(seed)\n"
+            "{\n"
+            "let total = 0\n"
+            "let index = 0\n"
+            "function weight(value) = value * 2 + seed\n"
+            "while (index < 3)\n"
+            "{\n"
+            "set index = index + 1\n"
+            "set total = total + weight(index)\n"
+            "}\n"
+            "return total\n"
+            "}\n"
+            "math_run outer(5) = ? -int64\n"
+            "if up = (ok) goto (push ({answer} = {(in = up)}))\n"
+            "print (<{answer}>)\n"
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(completed.stdout.strip(), b"27")
+
+    def test_compiled_unbalanced_the_world_warns_and_restores(self) -> None:
+        completed = self.compile_and_run(
+            "start(normal) = {leak}\n"
+            "{\n"
+            "The_world (stop)\n"
+            "push ({x} = {\"1\"})\n"
+            "}\n"
+            "math_run 1 + 1 = ? -int32\n"
+            "if up = (ok) goto (push ({y} = {(in = up)}))\n"
+            "print (<{y}>)\n"
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(completed.stdout.strip(), b"2")
+        self.assertIn(b"left The_world stop depth unbalanced", completed.stderr)
+
+    def test_compiled_record_operator_with_constructor_operand(self) -> None:
+        completed = self.compile_and_run(
+            "record Point { x, y }\n"
+            "operator + Point = { left.x + right.x, left.y + right.y }\n"
+            "function compute()\n"
+            "{\n"
+            "let base = Point(1, 2)\n"
+            "let shifted = base + Point(3, 4)\n"
+            "return shifted.x * 10 + shifted.y\n"
+            "}\n"
+            "math_run compute() = ? -int64\n"
+            "if up = (ok) goto (push ({answer} = {(in = up)}))\n"
+            "print (<{answer}>)\n"
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(completed.stdout.strip(), b"46")
 
     def test_compiled_generic_expression_function(self) -> None:
         completed = self.compile_and_run(
@@ -841,6 +1806,42 @@ print (<{value}>)
             source_path.write_text("hello\n", encoding="utf-8")
             with self.assertRaisesRegex(CompileError, "must not overwrite the source"):
                 compile_source(source_path, output_path=source_path)
+
+    def test_memory_report_cannot_overwrite_project_inputs_or_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source_path = Path(temporary_directory) / "program.cos"
+            source_path.write_text("math_run 1 = ?\n", encoding="utf-8")
+            with self.assertRaisesRegex(CompileError, "memory report path"):
+                compile_source(source_path, memory_report_path=source_path)
+
+    def test_compiler_rejects_context_over_configured_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source_path = Path(temporary_directory) / "program.cos"
+            source_path.write_text('var greeting = {"hello"}\n', encoding="utf-8")
+            with self.assertRaisesRegex(
+                CompileError,
+                "static Context requires 112 bytes.*limit of 63 bytes",
+            ):
+                compile_source(source_path, max_context_bytes=63)
+
+    def test_context_budget_must_be_positive(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source_path = Path(temporary_directory) / "program.cos"
+            source_path.write_text("math_run 1 = ?\n", encoding="utf-8")
+            with self.assertRaisesRegex(CompileError, "max_context_bytes must be greater than zero"):
+                compile_source(source_path, max_context_bytes=0)
+
+    def test_compiler_cli_defaults_memory_report_path_from_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            source = directory / "program.cos"
+            executable = directory / "custom-name.exe"
+            source.write_text("math_run 1 + 1 = ?\n", encoding="utf-8")
+            self.assertEqual(
+                compiler_main([str(source), "-o", str(executable), "--memory-report"]),
+                0,
+            )
+            self.assertTrue(executable.with_suffix(".memreport").is_file())
 
 
     def test_compiled_array_rebinding_matches_interpreter(self) -> None:
@@ -1294,6 +2295,96 @@ print (<{value}>)
         )
         self.assertNotEqual(completed.returncode, 0)
 
+    #%% ---- v8: 循环直接下沉为真 C 循环（回归锁） ----%%
+    def test_block_while_generates_native_c_loop(self) -> None:
+        source = """\
+#math
+call = (math)
+push ({n} = {"0"})
+while ({n} < 5)
+{
+    math_run {n} + 1 = ?
+    if up = (ok) goto (push ({n} = {(in = up)}))
+    math_run {n} * 2 = ?
+    if up = (ok) goto (push ({doubled} = {(in = up)}))
+}
+print (<{n}>)
+"""
+        generated = generate_c(parse(source))
+        # 顶层 while 必须是真 C 循环，而不是回调解释器逐句执行。
+        self.assertIn("while (", generated)
+        self.assertNotIn("cosmic_run_statement", generated)
+        self.assertNotIn("dispatch_statement", generated)
+        completed = self.compile_and_run(source)
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(completed.stdout.replace(b"\r\n", b"\n"), b"5\n")
+
+    def test_function_while_generates_native_c_loop(self) -> None:
+        source = """\
+function total(n)
+{
+let i = 0
+let s = 0
+while ({i} < {n})
+{
+set s = {s} + {i}
+set i = {i} + 1
+}
+return {s}
+}
+math_run total(5) = ? -int64
+if up = (ok) goto (push ({answer} = {(in = up)}))
+print (<{answer}>)
+"""
+        generated = generate_c(parse(source))
+        # 只看用户函数体，函数体内的 while 也应是真 C 循环。
+        function_start = generated.index("user_total(double")
+        function_end = generated.index("int main(void) {", function_start)
+        self.assertIn("while (", generated[function_start:function_end])
+        completed = self.compile_and_run(source)
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(completed.stdout.replace(b"\r\n", b"\n"), b"10\n")
+
+    def test_hop_pipeline_compiles_and_matches_interpreter(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            data_path = Path(temporary_directory) / "lines.txt"
+            data_path.write_text("a\nb\nc", encoding="utf-8")
+            # HOP 中文动词由 parse() 展开，编译与解释应走同一语义。
+            source = (
+                f'打开 "{data_path.as_posix()}" 存 文本\n'
+                "行数 文本 存 总行\n"
+                "print (<{总行}>)\n"
+            )
+            completed = self.compile_and_run(source)
+            interpreter_output = io.StringIO()
+            Interpreter(output=interpreter_output).run(parse(source))
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        compiled_output = completed.stdout.decode(errors="replace").replace("\r\n", "\n")
+        self.assertEqual(compiled_output, interpreter_output.getvalue())
+        self.assertEqual(compiled_output, "3\n")
+
+    def test_compiled_ask_secret_reads_piped_stdin(self) -> None:
+        source = 'ask ({pwd}) (<{"密码: "}>) -secret\nprint (<{pwd}>)\n'
+        # stdin 是管道时没有终端回显，读取必须回落到普通 fgets 并拿到正确值
+        self.assertIn("read_secret_line(cosmic_input", generate_c(parse(source)))
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            source_path = directory / "secret.cos"
+            executable_path = directory / "secret.exe"
+            source_path.write_text(source, encoding="utf-8")
+            compile_source(source_path, output_path=executable_path)
+            completed = subprocess.run(
+                [str(executable_path)],
+                input=b"s3cret\n",
+                check=False,
+                capture_output=True,
+                timeout=15,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        self.assertEqual(
+            completed.stdout.decode("utf-8", errors="replace").replace("\r\n", "\n"),
+            "密码: s3cret\n",
+        )
 
 
 if __name__ == "__main__":

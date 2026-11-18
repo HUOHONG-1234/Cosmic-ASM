@@ -7,6 +7,8 @@ from pathlib import Path
 
 from .parser import ParseError, parse
 from .runtime import ExitRequest, Interpreter, RuntimeError
+from .source_loader import load_source
+from . import hop
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -16,6 +18,11 @@ def main(argv: list[str] | None = None) -> int:
         "--no-external-commands",
         action="store_true",
         help="reject bash command statements instead of running them",
+    )
+    parser.add_argument(
+        "--no-input",
+        action="store_true",
+        help="reject ask statements without reading stdin",
     )
     parser.add_argument(
         "--max-loop-iterations",
@@ -37,9 +44,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--max-loop-iterations must be greater than zero")
 
     diagnostics: list[dict[str, object]] = []
+    source_text = ""
     try:
-        source = args.source.read_text(encoding="utf-8-sig")
-        program = parse(source)
+        source_text = load_source(args.source)
+        program = parse(source_text)
         if args.check:
             _static_check(program, diagnostics)
         else:
@@ -47,13 +55,22 @@ def main(argv: list[str] | None = None) -> int:
                 Interpreter(
                     allow_external_commands=not args.no_external_commands,
                     max_loop_iterations=args.max_loop_iterations,
+                    no_input=args.no_input,
                 ).run(program)
             except ExitRequest as request:
                 return request.code
     except (OSError, UnicodeError, ParseError, RuntimeError) as error:
         line = getattr(error, "line", 1)
-        message = getattr(error, "message", str(error))
+        message = hop.humanize(getattr(error, "message", str(error)))
         diagnostics.append({"line": line, "message": message, "severity": "error"})
+
+    # 附上出错的源码行，--check 时不必再去翻文件对行号。
+    if source_text:
+        source_lines = source_text.splitlines()
+        for item in diagnostics:
+            index = int(item.get("line", 0)) - 1
+            if 0 <= index < len(source_lines):
+                item["source"] = source_lines[index].strip()
 
     if args.check:
         if args.json:
@@ -64,17 +81,24 @@ def main(argv: list[str] | None = None) -> int:
                     f"line {item['line']}: {item['message']}",
                     file=sys.stderr,
                 )
+                if item.get("source"):
+                    print(f"  | {item['source']}", file=sys.stderr)
+            if len(diagnostics) > 1:
+                print(f"{len(diagnostics)} 个问题", file=sys.stderr)
         return 1 if diagnostics else 0
 
     if diagnostics:
-        print(f"line {diagnostics[0]['line']}: {diagnostics[0]['message']}", file=sys.stderr)
+        first = diagnostics[0]
+        print(f"line {first['line']}: {first['message']}", file=sys.stderr)
+        if first.get("source"):
+            print(f"  | {first['source']}", file=sys.stderr)
         return 1
     return 0
 
 
 def _static_check(program, diagnostics: list[dict[str, object]]) -> None:
     """Cheap structural checks that do not execute anything."""
-    known_imports = {"execute", "math", "pe", "atom"}
+    known_imports = {"execute", "math", "atom"}
 
     def walk(statements, imports: set[str]) -> None:
         for statement in statements:

@@ -1,0 +1,157 @@
+#% lib/text.cos —— 文本库（码点判定）
+#%
+#% 硬约束一：用户函数只能返回数值，不能返回字符串。
+#% 硬约束二（实测）：编译后端的字符串内置只接受字符串字面量或 var 文本变量，
+#%   不接受函数参数。所以「把文本作为参数传进函数」在编译版直接报错：
+#%     invalid expression: strlen expects a string literal, variable, or char_at result
+#%   因此本文件不再提供 text_len(t) 这类包装函数；文本查询请直接写内置调用：
+#%
+#%     var TEXT = {"Cosmic ASM"}
+#%     math_run strlen({TEXT}) = ? -int64          # 文本长度
+#%     math_run find({TEXT}, "ASM") = ? -int64     # 查找位置，字节下标
+#%     math_run line_count({TEXT}) = ? -int64      # 行数
+#%
+#% 硬约束三（实测）：编译后端的 ord 只接受字符串字面量、var 变量或 chr(...) 结果，
+#%   不接受 char_at(...)。要拿单个字符的码点，先把字符放进 var：
+#%
+#%     var CH = {"中"}
+#%     math_run ord({CH}) = ? -int64               # 20013
+#%
+#%   字符串结果（substr_bytes / trim / upper / lower / replace / read_text /
+#%   str_from_bytes）同样只能直接用在 math_run 表达式里，或 push 到文本变量。
+#%
+#% 本文件提供的是「码点 → 数值」的纯数值函数：先用 ord({CH}) 取出码点，
+#% 再交给这些函数判断。它们在解释器和编译版里行为一致：
+#%
+#%     var CH = {"7"}
+#%     math_run char_is_digit(ord({CH})) = ? -int64  # 1
+#%
+#% 标识符限制：函数名首字符必须是 ASCII 字母或下划线（[A-Za-z_]\w*），
+#% 所以名字用英文；中文对照见 lib/README.md。
+
+#% 是否空白：制表 9、换行 10、回车 13、空格 32（与内置 trim 去掉的字符一致）
+function char_is_space(code)
+{
+    if (code == 9)
+    {
+        return 1
+    }
+    if (code == 10)
+    {
+        return 1
+    }
+    if (code == 13)
+    {
+        return 1
+    }
+    if (code == 32)
+    {
+        return 1
+    }
+    return 0
+}
+
+#% 是否 ASCII 数字 0-9
+function char_is_digit(code)
+{
+    if (code < 48)
+    {
+        return 0
+    }
+    if (code > 57)
+    {
+        return 0
+    }
+    return 1
+}
+
+#% 是否 ASCII 字母 A-Z / a-z
+function char_is_alpha(code)
+{
+    if (code >= 65)
+    {
+        if (code <= 90)
+        {
+            return 1
+        }
+    }
+    if (code >= 97)
+    {
+        if (code <= 122)
+        {
+            return 1
+        }
+    }
+    return 0
+}
+
+#% 终端显示宽度：CJK / 全角 / emoji 返回 2，其余返回 1。
+#% 取向与 Python 侧 unicodedata.east_asian_width 的 W/F 判定一致，
+#% 用于 TUI 画框时避免中文把框撑歪。
+function char_width(code)
+{
+    if (code >= 4352)
+    {
+        if (code <= 4447)
+        {
+            return 2
+        }
+    }
+    if (code >= 11904)
+    {
+        if (code <= 42191)
+        {
+            return 2
+        }
+    }
+    if (code >= 44032)
+    {
+        if (code <= 55203)
+        {
+            return 2
+        }
+    }
+    if (code >= 63744)
+    {
+        if (code <= 64255)
+        {
+            return 2
+        }
+    }
+    if (code >= 65072)
+    {
+        if (code <= 65099)
+        {
+            return 2
+        }
+    }
+    if (code >= 65280)
+    {
+        if (code <= 65376)
+        {
+            return 2
+        }
+    }
+    if (code >= 65504)
+    {
+        if (code <= 65510)
+        {
+            return 2
+        }
+    }
+    if (code >= 127744)
+    {
+        if (code <= 128591)
+        {
+            return 2
+        }
+    }
+    if (code >= 129280)
+    {
+        if (code <= 129535)
+        {
+            return 2
+        }
+    }
+    return 1
+}

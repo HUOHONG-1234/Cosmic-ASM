@@ -1,0 +1,27 @@
+#% lib/io.cos —— 文件读写库
+#%
+#% 实测结论：read_text / write_text 不能在用户函数体内工作（两条后端不一致）：
+#%   解释器：function file_bytes(p) = strlen(read_text(p)) 可以跑；
+#%   编译版：strlen 只接受字符串字面量或 var 变量，参数会报
+#%           invalid expression: strlen expects a string literal, variable, or char_at result
+#% 而且 read_text(...) 不能直接嵌在 strlen/find/line_count 里（编译版同样只接受
+#% 字面量或 var）。所以本文件不提供 file_bytes(path) 之类的包装函数，避免留下
+#% 编不过的文件。
+#%
+#% 正确写法（两条后端一致）：先把内容读进文本变量，再对变量做查询。
+#% 读取上限 16 MiB。
+#%
+#%   math_run read_text("index.json") = ?
+#%   push ({TXT} = {(in = up)})
+#%   math_run strlen({TXT}) = ? -int64                # 文件字节数
+#%   math_run line_count({TXT}) = ? -int64            # 文件行数
+#%   math_run find({TXT}, "ERROR") = ? -int64
+#%
+#% 注意 push 的值只能是字面量、变量或 (in = up)，因此
+#%   push ({CONTENT} = read_text({PATH}))
+#% 会被解析器拒绝；必须像上面那样先 math_run，再用 (in = up) 接结果。
+#%
+#% 写入（路径与内容同样只能是字符串字面量或 var 文本变量）：
+#%   math_run write_text("out.txt", "content") = ? -int64
+#%
+#% 结论：本文件只保留说明，不定义函数，保证 include 后在两个后端都能通过。

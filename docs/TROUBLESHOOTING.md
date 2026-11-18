@@ -114,18 +114,13 @@ call = (math)
 
 ### component 'pe' is not supported
 
-v1 的组件表里有 `#pe`，但**从未实现**。v5 及以前的表现是：
+v1 的组件表里有 `#pe`，但**从未实现**。当前版本在解析阶段直接报错：
 
 ```asm
-# 解释器：不报错，只擦一行 warning
-warning: line 3: pe is recognized but not implemented
+component 'pe' is not supported (removed in v6)
 ```
 
-编译版更安静：生成一个 `STATUS_OK` 占位，什么也不做。
-
-**这种状态最坑：它既不工作，又不像坏了。**
-
-v6 起改为明确的编译错误。想解析 PE 文件的正确做法是写普通程序读字节：
+想解析 PE 文件的正确做法是写普通程序读字节：
 
 ```asm
 #bytes

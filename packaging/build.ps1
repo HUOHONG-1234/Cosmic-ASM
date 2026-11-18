@@ -27,10 +27,22 @@ if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
 New-Item -ItemType Directory -Force -Path $distDirectory, $workDirectory | Out-Null
 
 $entryPoints = @(
-    @{ Script = "interpreter_entry.py"; Name = "CosmicInterpreter" },
-    @{ Script = "compiler_entry.py"; Name = "CosmicCompiler" },
-    @{ Script = "cosp_entry.py"; Name = "cosp" }
+    @{ Script = "cosmic_entry.py"; Name = "cosmic" }
 )
+
+# v8 主线 E1：只发布单个 cosmic.exe。旧的三个入口先在 D:\ASM 留一份备份，
+# 以便现有脚本还有时间迁移。
+$legacyNames = @("CosmicInterpreter", "CosmicCompiler", "cosp")
+$legacyExes = @($legacyNames | ForEach-Object { Join-Path $distDirectory "$_.exe" } | Where-Object { Test-Path -LiteralPath $_ })
+if ($legacyExes.Count -gt 0) {
+    $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $backupRoot = Join-Path (Split-Path -Parent $projectRoot) "backup-exes-$stamp"
+    New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null
+    foreach ($legacy in $legacyExes) {
+        Copy-Item -LiteralPath $legacy -Destination (Join-Path $backupRoot (Split-Path -Leaf $legacy)) -Force
+    }
+    Write-Host "Archived legacy executables to $backupRoot"
+}
 
 foreach ($entryPoint in $entryPoints) {
     $output = Join-Path $distDirectory "$($entryPoint.Name).exe"
@@ -72,7 +84,8 @@ if (-not (Test-Path -LiteralPath $msiPath)) {
 $distributionMsi = Join-Path $distDirectory "CosmicAsm-$Version.msi"
 Copy-Item -LiteralPath $msiPath -Destination $distributionMsi -Force
 Write-Host "Created:"
-Write-Host "  $(Join-Path $distDirectory 'CosmicInterpreter.exe')"
-Write-Host "  $(Join-Path $distDirectory 'CosmicCompiler.exe')"
-Write-Host "  $(Join-Path $distDirectory 'cosp.exe')"
+Write-Host "  $(Join-Path $distDirectory 'cosmic.exe')"
 Write-Host "  $distributionMsi"
+if ($legacyExes.Count -gt 0) {
+    Write-Host "Legacy executables were archived under $(Split-Path -Parent $projectRoot); remove stale copies in dist\ if you do not need them."
+}

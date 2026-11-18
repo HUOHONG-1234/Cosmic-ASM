@@ -1,0 +1,138 @@
+name: CI
+
+# v8 主线 F（docs/v8-plan.md 第七章）最小可行 CI：
+#   1. 三平台矩阵跑测试（验证"纯 Python 可移植"）
+#   2. C 后端编译冒烟（gcc 存在才跑，探测不到就跳过，不硬失败）
+# 显式不做：自动发版、覆盖率门槛、CI 内构建 Windows MSI。
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+# 同一分支/PR 的新推送取消旧的运行，避免排队堆积
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# 只读权限：CI 只需要读代码
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }} / py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false # 三平台互不阻塞，一次就能看全所有平台的失败
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: 升级 pip
+        run: python -m pip install --upgrade pip
+
+      - name: 安装依赖（如存在 requirements 文件）
+        # 统一用 bash：windows-latest 默认是 pwsh，跨平台判断写起来容易踩坑
+        shell: bash
+        run: |
+          if [ -f requirements-dev.txt ]; then
+            echo "发现 requirements-dev.txt，安装其中依赖"
+            python -m pip install -r requirements-dev.txt
+          elif [ -f requirements.txt ]; then
+            echo "发现 requirements.txt，安装其中依赖"
+            python -m pip install -r requirements.txt
+          else
+            echo "仓库根目录没有 requirements-dev.txt / requirements.txt，跳过依赖安装（项目仅依赖标准库）"
+          fi
+
+      - name: 确保 pytest 可用
+        # setup-python 提供的 CPython 不自带 pytest；仅在缺失时安装，避免覆盖
+        # requirements 里可能钉住的版本。
+        shell: bash
+        run: python -c "import pytest" 2>/dev/null || python -m pip install pytest
+
+      - name: 运行测试
+        # 已知风险：tests/test_compiler.py 里的 WSL 交叉编译集成用例只按
+        # shutil.which("wsl.exe") 判断是否跳过。windows-latest 带 wsl.exe 但默认
+        # 没有 Ubuntu-22.04 发行版，该用例在 Windows runner 上可能失败；正确的修法
+        # 是收紧测试的 skip 条件（本任务只新增 workflow，不动测试）。
+        run: python -m pytest -q
+
+      - name: 语法编译检查
+        run: python -m compileall -q cosmic_interpreter tests
+
+      - name: 空白字符检查
+        # 干净检出时工作区无改动，此处不会报错；若将来行尾被转换导致误报，
+        # 可改为：git diff --check -- . ':!examples/demo.cos'
+        run: git diff --check
+
+  gcc-smoke:
+    name: gcc-smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      # 只跑 ubuntu + windows：这两个 runner 上 gcc 可用性有实际意义，
+      # macOS 上的 /usr/bin/gcc 只是 clang 的别名，冒烟价值低且易产生噪音。
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: 探测 gcc
+        # 不假设 runner 一定自带 gcc（windows-latest 尤其不确定），探测结果写入
+        # steps.gcc.outputs.found，后续步骤据此决定跑还是跳过，绝不硬失败。
+        id: gcc
+        shell: bash
+        run: |
+          if command -v gcc >/dev/null 2>&1; then
+            echo "找到 gcc：$(command -v gcc)"
+            gcc --version | head -n 1
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "没找到 gcc，将跳过 C 后端编译冒烟"
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 提示跳过
+        if: steps.gcc.outputs.found != 'true'
+        run: echo "::notice::未探测到 gcc，跳过 C 后端编译冒烟（不属于失败）"
+
+      - name: 编译 examples/demo.cos
+        if: steps.gcc.outputs.found == 'true'
+        id: compile
+        shell: bash
+        run: |
+          # 输出名按平台区分：Windows 用 .exe，类 Unix 不带后缀
+          exe="build/demo"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            exe="build/demo.exe"
+          fi
+          python -m cosmic_interpreter.compiler examples/demo.cos -o "$exe"
+          echo "产物：$exe"
+          echo "exe=$exe" >> "$GITHUB_OUTPUT"
+
+      - name: 运行产物并断言输出非空
+        if: steps.gcc.outputs.found == 'true'
+        shell: bash
+        run: |
+          exe="${{ steps.compile.outputs.exe }}"
+          output="$("$exe")"
+          printf '程序输出：\n%s\n' "$output"
+          if [ -z "$output" ]; then
+            echo "::error::编译出的可执行文件没有任何输出"
+            exit 1
+          fi

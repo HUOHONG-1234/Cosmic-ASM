@@ -1,6 +1,5 @@
 #% Cosmic ASM example program
 #execute
-#pe
 #hello = GBK
 push ({hello} = {"hello_world"})
 

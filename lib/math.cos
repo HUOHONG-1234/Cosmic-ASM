@@ -1,0 +1,56 @@
+#% lib/math.cos —— 数值库
+#%
+#% 只包含纯数值函数；函数体里所有局部名必须在最外层、任何 if/while 之前用 let 声明。
+
+#% 平方
+function sq(x) = x * x
+
+#% 立方
+function cube(x) = x * x * x
+
+#% 阶乘：n < 2 时返回 1；非整数按不超过 n 的整数计算（循环条件 index <= n）
+function factorial(n)
+{
+    let total = 1
+    let index = 2
+    while (index <= n)
+    {
+        set total = total * index
+        set index = index + 1
+    }
+    return total
+}
+
+#% 最大值
+function max2(a, b)
+{
+    if (a > b)
+    {
+        return a
+    }
+    return b
+}
+
+#% 最小值
+function min2(a, b)
+{
+    if (a < b)
+    {
+        return a
+    }
+    return b
+}
+
+#% 夹紧到 [low, high]
+function clamp(v, low, high)
+{
+    if (v < low)
+    {
+        return low
+    }
+    if (v > high)
+    {
+        return high
+    }
+    return v
+}

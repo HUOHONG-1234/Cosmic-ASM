@@ -4,6 +4,7 @@ import ast
 import cmath
 import ctypes
 import ctypes.util
+import functools
 import math
 import os
 import random
@@ -38,6 +39,18 @@ class RuntimeError(Exception):
         super().__init__(f"line {line}: {message}")
         self.line = line
         self.message = message
+
+
+@dataclass(frozen=True)
+class UserFunction:
+    """A user-defined function, either a single expression or a statement body."""
+
+    parameters: tuple[str, ...]
+    line: int
+    expression: str | None = None
+    body: tuple[Statement, ...] | None = None
+    max_loop_iterations: int | None = None
+    captures: tuple[str, ...] = ()
 
 
 @dataclass
@@ -407,12 +420,40 @@ def _eval_array_literal(
     values: dict[str, MathValue],
     *,
     complex_mode: bool,
-    functions: dict[str, tuple[tuple[str, ...], str, int]] | None = None,
+    functions: dict[str, UserFunction] | None = None,
 ) -> list[float | complex]:
     if isinstance(node, ast.Name) and isinstance(values.get(node.id), list):
         return values[node.id]
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
         function_name = node.func.id.lower()
+        if function_name == "bytes_from_str":
+            if len(node.args) != 1 or node.keywords:
+                raise ValueError("bytes_from_str expects one string")
+            value = _eval_numeric_node(node.args[0], values, complex_mode=complex_mode, functions=functions)
+            if not isinstance(value, str):
+                raise ValueError("bytes_from_str expects a string")
+            if "\0" in value:
+                raise ValueError("bytes_from_str does not support embedded NUL bytes")
+            return list(value.encode("utf-8"))
+        if function_name == "array_fill":
+            if len(node.args) != 2 or node.keywords:
+                raise ValueError("array_fill expects a length and a numeric value")
+            length_value = _eval_numeric_node(node.args[0], values, complex_mode=complex_mode, functions=functions)
+            fill_value = _eval_numeric_node(node.args[1], values, complex_mode=complex_mode, functions=functions)
+            if isinstance(length_value, (str, list, complex)) or not float(length_value).is_integer():
+                raise ValueError("array_fill length must be an integer")
+            length = int(length_value)
+            if not 0 <= length <= 1_000_000:
+                raise ValueError("array_fill length must be between 0 and 1000000")
+            if isinstance(fill_value, (str, list)) or (isinstance(fill_value, complex) and not complex_mode):
+                raise ValueError("array_fill value must be numeric")
+            return [fill_value] * length
+        if function_name == "array_copy":
+            if len(node.args) != 1 or node.keywords:
+                raise ValueError("array_copy expects one array")
+            return _eval_array_literal(
+                node.args[0], values, complex_mode=complex_mode, functions=functions
+            ).copy()
         if function_name in {
             "matrix_mul", "matrix_transpose", "matrix2_inverse", "matrix3_inverse",
         }:
@@ -635,7 +676,7 @@ def _matrix_from_node(
     values: dict[str, MathValue],
     *,
     complex_mode: bool,
-    functions: dict[str, tuple[tuple[str, ...], str, int]] | None,
+    functions: dict[str, UserFunction] | None,
 ) -> Matrix:
     """Read a matrix argument as a shape-tagged value.
 
@@ -686,7 +727,7 @@ def _eval_matrix_root(
     values: dict[str, MathValue],
     *,
     complex_mode: bool,
-    functions: dict[str, tuple[tuple[str, ...], str, int]] | None,
+    functions: dict[str, UserFunction] | None,
 ) -> Matrix | None:
     """Return the matrix value of a matrix-producing expression, else None."""
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
@@ -713,7 +754,7 @@ def _eval_numeric_stats_builtin(
     values: dict[str, MathValue],
     *,
     complex_mode: bool,
-    functions: dict[str, tuple[tuple[str, ...], str, int]] | None,
+    functions: dict[str, UserFunction] | None,
     call_depth: int = 0,
     bitwise_allowed: bool = False,
     uint32: bool = False,
@@ -848,7 +889,7 @@ def _eval_matrix_builtin(
     values: dict[str, MathValue],
     *,
     complex_mode: bool,
-    functions: dict[str, tuple[tuple[str, ...], str, int]] | None,
+    functions: dict[str, UserFunction] | None,
     call_depth: int = 0,
     bitwise_allowed: bool = False,
     uint32: bool = False,
@@ -982,7 +1023,7 @@ def _eval_numeric_node(
     values: dict[str, MathValue],
     *,
     complex_mode: bool = False,
-    functions: dict[str, tuple[tuple[str, ...], str, int]] | None = None,
+    functions: dict[str, UserFunction] | None = None,
     call_depth: int = 0,
     error_count: int = 0,
     bitwise_allowed: bool = False,
@@ -1086,6 +1127,77 @@ def _eval_numeric_node(
             return (result & 0xFFFFFFFF) if uint32 else result
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
         function_name = node.func.id.lower()
+        if function_name == "str_from_bytes":
+            if len(node.args) != 1 or node.keywords:
+                raise ValueError("str_from_bytes expects one byte array")
+            values = _eval_array_literal(node.args[0], values, complex_mode=False, functions=functions)
+            if any(
+                isinstance(value, complex)
+                or not math.isfinite(float(value))
+                or not float(value).is_integer()
+                or not 0 <= value <= 255
+                for value in values
+            ):
+                raise ValueError("str_from_bytes values must be integers in 0..255")
+            if any(value == 0 for value in values):
+                raise ValueError("str_from_bytes does not support embedded NUL bytes")
+            try:
+                return bytes(int(value) for value in values).decode("utf-8")
+            except UnicodeDecodeError as error:
+                raise ValueError("str_from_bytes requires valid UTF-8 bytes") from error
+        if function_name in {"substr_bytes", "find", "trim", "upper", "lower", "replace", "line_count"}:
+            arities = {
+                "substr_bytes": 3, "find": 2, "trim": 1,
+                "upper": 1, "lower": 1, "replace": 3, "line_count": 1,
+            }
+            if node.keywords or len(node.args) != arities[function_name]:
+                raise ValueError(f"{function_name} expects {arities[function_name]} argument(s)")
+            arguments = [
+                _eval_numeric_node(
+                    argument,
+                    values,
+                    complex_mode=complex_mode,
+                    functions=functions,
+                    call_depth=call_depth,
+                    bitwise_allowed=bitwise_allowed,
+                    uint32=uint32,
+                )
+                for argument in node.args
+            ]
+            text = arguments[0]
+            if not isinstance(text, str):
+                raise ValueError(f"{function_name} expects a string as its first argument")
+            if function_name == "substr_bytes":
+                start, length = arguments[1:]
+                if any(isinstance(value, (str, list, complex)) or not float(value).is_integer() for value in (start, length)):
+                    raise ValueError("substr_bytes start and length must be integers")
+                start, length = int(start), int(length)
+                if start < 0 or length < 0:
+                    raise ValueError("substr_bytes start and length must not be negative")
+                encoded = text.encode("utf-8")
+                return encoded[start:start + length].decode("utf-8", errors="replace")
+            if function_name == "find":
+                if not isinstance(arguments[1], str):
+                    raise ValueError("find expects a string to search for")
+                return text.encode("utf-8").find(arguments[1].encode("utf-8"))
+            if function_name == "line_count":
+                # 行数 = 换行符个数 + (非空且不以换行结尾时补一行)；空文本为 0。
+                if not text:
+                    return 0
+                newlines = text.count("\n")
+                return newlines if text.endswith("\n") else newlines + 1
+            if function_name == "trim":
+                return text.strip(" \t\r\n")
+            if function_name == "upper":
+                return "".join(character.upper() for character in text)
+            if function_name == "lower":
+                return "".join(character.lower() for character in text)
+            source, replacement = arguments[1:]
+            if not isinstance(source, str) or not isinstance(replacement, str):
+                raise ValueError("replace expects string arguments")
+            if not source:
+                raise ValueError("replace source must not be empty")
+            return text.replace(source, replacement)
         if function_name in {"array_len", "mean", "std", "min", "max"}:
             if len(node.args) != 1 or node.keywords:
                 raise ValueError(f"{function_name} expects one array")
@@ -1120,7 +1232,7 @@ def _eval_numeric_node(
                 bitwise_allowed=bitwise_allowed,
                 uint32=uint32,
             )
-        if function_name in {"array_set", "array_push"}:
+        if function_name in {"array_set", "array_push", "bytes_from_str"}:
             return _eval_array_literal(
                 node, values, complex_mode=complex_mode, functions=functions
             )
@@ -1353,7 +1465,8 @@ def _eval_numeric_node(
         if functions and function_name in functions:
             if node.keywords:
                 raise ValueError("user-defined functions do not accept keyword arguments")
-            parameters, expression, definition_line = functions[function_name]
+            entry = functions[function_name]
+            parameters = entry.parameters
             if len(node.args) != len(parameters):
                 raise ValueError(f"{function_name} expects {len(parameters)} argument(s)")
             if call_depth >= 256:
@@ -1368,13 +1481,35 @@ def _eval_numeric_node(
                 )
                 for argument in node.args
             ]
-            local_values = dict(values)
+            if entry.body is not None:
+                return _eval_function_body(
+                    entry,
+                    arguments,
+                    values,
+                    complex_mode=complex_mode,
+                    functions=functions,
+                    call_depth=call_depth + 1,
+                    bitwise_allowed=bitwise_allowed,
+                    uint32=uint32,
+                )
+            local_values = {
+                capture: values[capture]
+                for capture in entry.captures
+                if capture in values
+            }
+            missing = [
+                capture for capture in entry.captures if capture not in local_values
+            ]
+            if missing:
+                raise ValueError(
+                    f"captured value '{missing[0]}' is not available in this scope"
+                )
             local_values.update(zip(parameters, arguments))
-            transformed, _variables = transform_braced_expression(expression)
+            transformed, _variables = transform_braced_expression(str(entry.expression))
             try:
                 function_node = ast.parse(transformed, mode="eval").body
             except SyntaxError as error:
-                raise ValueError(f"invalid expression in function declared at line {definition_line}") from error
+                raise ValueError(f"invalid expression in function declared at line {entry.line}") from error
             if isinstance(function_node, (ast.Compare, ast.BoolOp)):
                 return _condition_value(
                     function_node,
@@ -1421,33 +1556,63 @@ def _eval_numeric_node(
     raise ValueError("expression contains unsupported syntax")
 
 
+_STRING_ARGUMENT_FUNCTIONS = frozenset({
+    "ord", "strlen", "char_at", "read_text", "write_text",
+    "substr_bytes", "find", "trim", "upper", "lower", "replace", "line_count",
+})
+_TAKE_ALL_ARGUMENTS_FUNCTIONS = frozenset({"write_text", "replace"})
+_VARIABLE_TOKEN_RE = re.compile(r"\b(?:var_[A-Za-z_]\w*|tape_[A-Za-z_]\w*)\b")
+_TAPE_CALL_RE = re.compile(r"tape\s*\(\s*([A-Za-z_]\w*)\s*\)", re.I)
+_INTEGER_TEXT_RE = re.compile(r"[+-]?\d+")
+_COMPLEX_TEXT_RE = re.compile(
+    r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[+-](?:\d+(?:\.\d*)?|\.\d+))?i"
+)
+
+
+@functools.lru_cache(maxsize=4096)
+def _expression_plan(
+    expression: str,
+) -> tuple[str, frozenset[str], tuple[str, ...], "ast.Expression"]:
+    """把表达式字符串编译成可复用的计划。
+
+    热循环里每次迭代都对同一个表达式做「花括号变换 + 正则 + ast.parse」是解释器
+    最大的固定开销（实测占 wall time 59%）。这些步骤只依赖表达式文本，因此按
+    字符串缓存；取值阶段仍然每轮读取当前变量，语义不变。
+    """
+    transformed, _variables = transform_braced_expression(expression)
+    transformed = _TAPE_CALL_RE.sub(r"tape_\1", transformed)
+    transformed = normalize_rag_calls(transformed)
+    tree = ast.parse(transformed, mode="eval")
+    string_variables = frozenset(
+        argument.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id.lower() in _STRING_ARGUMENT_FUNCTIONS
+        and node.args
+        for argument in (
+            node.args
+            if node.func.id.lower() in _TAKE_ALL_ARGUMENTS_FUNCTIONS
+            else (node.args[0],)
+        )
+        if isinstance(argument, ast.Name) and argument.id.startswith("var_")
+    )
+    tokens = tuple(sorted(set(_VARIABLE_TOKEN_RE.findall(transformed))))
+    return transformed, string_variables, tokens, tree
+
+
 def _numeric_values(
     expression: str,
     context: Context,
     line: int,
 ) -> tuple[str, dict[str, MathValue]]:
-    transformed, _variables = transform_braced_expression(expression)
-    transformed = re.sub(r"tape\s*\(\s*([A-Za-z_]\w*)\s*\)", r"tape_\1", transformed, flags=re.I)
-    transformed = normalize_rag_calls(transformed)
-    tree = ast.parse(transformed, mode="eval")
-    string_variables = {
-        argument.id
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id.lower() in {"ord", "strlen", "char_at", "read_text", "write_text"}
-        and node.args
-        for argument in (
-            node.args if node.func.id.lower() == "write_text" else (node.args[0],)
-        )
-        if isinstance(argument, ast.Name) and argument.id.startswith("var_")
-    }
+    transformed, string_variables, tokens, _tree = _expression_plan(expression)
     values: dict[str, MathValue] = {}
     for array_name, array_values in context.arrays.items():
         values[array_name] = array_values
     for matrix_name, matrix_value in context.matrix_arrays.items():
         values[matrix_name] = matrix_value
-    for token in set(re.findall(r"\b(?:var_[A-Za-z_]\w*|tape_[A-Za-z_]\w*)\b", transformed)):
+    for token in tokens:
         if token.startswith("var_"):
             name = token[4:]
             variable = context.variables.get(name)
@@ -1464,9 +1629,9 @@ def _numeric_values(
                 raise ValueError(f"variable '{name}' is empty")
             if token in string_variables:
                 values[token] = text
-            elif re.fullmatch(r"[+-]?\d+", text):
+            elif _INTEGER_TEXT_RE.fullmatch(text):
                 values[token] = int(text)
-            elif re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[+-](?:\d+(?:\.\d*)?|\.\d+))?i", text):
+            elif _COMPLEX_TEXT_RE.fullmatch(text):
                 values[token] = complex(text[:-1] + "j")
             else:
                 try:
@@ -1488,23 +1653,23 @@ def _evaluate_expression(
     line: int,
     *,
     math_mode: str = "float64",
-    functions: dict[str, tuple[tuple[str, ...], str, int]] | None = None,
+    functions: dict[str, UserFunction] | None = None,
     error_count: int = 0,
 ) -> int | float | complex | str:
     try:
         transformed, values = _numeric_values(expression, context, line)
-        transformed = normalize_rag_calls(transformed)
         if len(transformed) > 512:
             raise ValueError("math expression is too long")
-        tree = ast.parse(transformed, mode="eval")
+        # 计划里已经包含 transformed 与 AST，这里直接复用，避免二次变换/解析。
+        tree = _expression_plan(expression)[3]
         if (
             isinstance(tree.body, ast.List)
             or isinstance(tree.body, ast.Name) and isinstance(values.get(tree.body.id), list)
             or isinstance(tree.body, ast.Call)
             and isinstance(tree.body.func, ast.Name)
             and tree.body.func.id.lower() in {
-                "array_set", "array_push", "matrix_mul", "matrix_transpose",
-                "matrix2_inverse", "matrix3_inverse",
+                "array_set", "array_push", "bytes_from_str", "matrix_mul", "matrix_transpose",
+                "matrix2_inverse", "matrix3_inverse", "array_fill", "array_copy",
             }
         ):
             raise ValueError(
@@ -1568,11 +1733,150 @@ def _format_numeric(value: int | float | complex | str, precision: int = 15) -> 
     return format(value, f".{precision}g")
 
 
+class _FunctionBreak(Exception):
+    pass
+
+
+class _FunctionContinue(Exception):
+    pass
+
+
+class _FunctionReturn(Exception):
+    def __init__(self, value: MathValue) -> None:
+        super().__init__("function return")
+        self.value = value
+
+
+def _walk_body_statements(statements: tuple[Statement, ...]) -> list[Statement]:
+    walked: list[Statement] = []
+    for statement in statements:
+        walked.append(statement)
+        if statement.body:
+            walked.extend(_walk_body_statements(statement.body))
+        else_body = statement.data.get("else_body")
+        if isinstance(else_body, tuple):
+            walked.extend(_walk_body_statements(else_body))
+    return walked
+
+
+def _eval_function_body(
+    entry: UserFunction,
+    arguments: list[MathValue],
+    values: dict[str, MathValue],
+    *,
+    complex_mode: bool = False,
+    functions: dict[str, UserFunction] | None = None,
+    call_depth: int = 0,
+    bitwise_allowed: bool = False,
+    uint32: bool = False,
+) -> MathValue:
+    frame: dict[str, MathValue] = {}
+    for capture in entry.captures:
+        if capture not in values:
+            raise ValueError(f"captured value '{capture}' is not available in this scope")
+        frame[capture] = values[capture]
+    frame.update(zip(entry.parameters, arguments))
+    nested_functions = dict(functions or {})
+    for statement in _walk_body_statements(entry.body or ()):
+        if statement.kind != "function_nested":
+            continue
+        nested_functions[str(statement.data["name"]).lower()] = UserFunction(
+            tuple(str(value) for value in statement.data["parameters"]),
+            statement.line,
+            expression=str(statement.data["expression"]),
+            captures=tuple(str(value) for value in statement.data["captures"]),
+        )
+    functions = nested_functions
+    limit = entry.max_loop_iterations
+
+    def evaluate(expression: str, line: int) -> MathValue:
+        try:
+            node = ast.parse(expression, mode="eval").body
+        except SyntaxError as error:
+            raise ValueError(f"invalid expression at line {line}: {error}") from error
+        return _eval_numeric_node(
+            node,
+            frame,
+            complex_mode=complex_mode,
+            functions=functions,
+            call_depth=call_depth,
+            bitwise_allowed=bitwise_allowed,
+            uint32=uint32,
+        )
+
+    def condition(expression: str, line: int) -> bool:
+        try:
+            node = ast.parse(expression, mode="eval").body
+        except SyntaxError as error:
+            raise ValueError(f"invalid condition at line {line}: {error}") from error
+        return _condition_value(node, frame, functions=functions)
+
+    def run(statements: tuple[Statement, ...]) -> None:
+        for statement in statements:
+            kind = statement.kind
+            if kind in {"function_local", "function_set"}:
+                frame[str(statement.data["name"])] = evaluate(
+                    str(statement.data["expression"]), statement.line
+                )
+            elif kind == "function_record_local":
+                base = str(statement.data["name"])
+                for field, expression in zip(
+                    statement.data["record_fields"], statement.data["fields"]
+                ):
+                    frame[f"{base}__{field}"] = evaluate(str(expression), statement.line)
+            elif kind in {"function_record_copy", "function_record_assign"}:
+                base = str(statement.data["name"])
+                source = str(statement.data["source"])
+                for field in statement.data["record_fields"]:
+                    frame[f"{base}__{field}"] = frame[f"{source}__{field}"]
+            elif kind == "function_record_set":
+                base = str(statement.data["name"])
+                field = str(statement.data["field"])
+                frame[f"{base}__{field}"] = evaluate(
+                    str(statement.data["expression"]), statement.line
+                )
+            elif kind == "function_return":
+                raise _FunctionReturn(
+                    evaluate(str(statement.data["expression"]), statement.line)
+                )
+            elif kind == "function_if":
+                if condition(str(statement.data["condition"]), statement.line):
+                    run(statement.body)
+                else:
+                    run(tuple(statement.data["else_body"]))  # type: ignore[arg-type]
+            elif kind == "function_while":
+                iterations = 0
+                while condition(str(statement.data["condition"]), statement.line):
+                    if limit is not None and iterations >= limit:
+                        raise ValueError("loop iteration limit exceeded")
+                    iterations += 1
+                    try:
+                        run(statement.body)
+                    except _FunctionContinue:
+                        continue
+                    except _FunctionBreak:
+                        break
+            elif kind == "function_break":
+                raise _FunctionBreak()
+            elif kind == "function_continue":
+                raise _FunctionContinue()
+            elif kind == "function_nested":
+                continue
+            else:
+                raise ValueError(f"unsupported function statement '{kind}'")
+
+    try:
+        run(entry.body or ())
+    except _FunctionReturn as returned:
+        return returned.value
+    return 0
+
+
 def _condition_value(
     node: ast.expr,
     values: dict[str, MathValue],
     *,
-    functions: dict[str, tuple[tuple[str, ...], str, int]] | None = None,
+    functions: dict[str, UserFunction] | None = None,
 ) -> bool:
     if isinstance(node, ast.Compare):
         left = _eval_numeric_node(node.left, values, functions=functions)
@@ -1610,11 +1914,11 @@ def _evaluate_condition(
     expression: str,
     context: Context,
     line: int,
-    functions: dict[str, tuple[tuple[str, ...], str, int]] | None = None,
+    functions: dict[str, UserFunction] | None = None,
 ) -> bool:
     try:
-        transformed, values = _numeric_values(expression, context, line)
-        tree = ast.parse(transformed, mode="eval")
+        _transformed, values = _numeric_values(expression, context, line)
+        tree = _expression_plan(expression)[3]
         return _condition_value(tree.body, values, functions=functions)
     except (SyntaxError, ValueError, TypeError, ZeroDivisionError, OverflowError) as error:
         raise RuntimeError(line, f"invalid condition: {error}") from error
@@ -1633,6 +1937,8 @@ class Interpreter:
         sleep: Callable[[float], None] = time.sleep,
         external_runner: ExternalRunner | None = None,
         max_loop_iterations: int | None = None,
+        input_stream: TextIO | None = None,
+        no_input: bool = False,
     ) -> None:
         self.allow_external_commands = allow_external_commands
         self.output = output or sys.stdout
@@ -1640,6 +1946,8 @@ class Interpreter:
         self.sleep = sleep
         self.external_runner = external_runner or self._run_external
         self.max_loop_iterations = max_loop_iterations
+        self.input_stream = input_stream or sys.stdin
+        self.no_input = no_input
         self.context = Context()
         self.last = Result()
         self.last_block_status: dict[str, str] = {}
@@ -1647,7 +1955,7 @@ class Interpreter:
         self.warnings: list[str] = []
         self.math_mode = "float64"
         self.output_precision = 15
-        self.functions: dict[str, tuple[tuple[str, ...], str, int]] = {}
+        self.functions: dict[str, UserFunction] = {}
         self.pending_jump_line: int | None = None
         self.error_count = 0
         self.dll_libraries: dict[str, object] = {}
@@ -1661,10 +1969,15 @@ class Interpreter:
         self.atom_lock = threading.RLock()
         self.output_lock = threading.Lock()
         self._atom_local = threading.local()
+        self.pinned_variables: set[str] = set()
+        self.gc_stop_depth = 0
 
     def run(self, program: Program) -> Result:
         self.math_mode = program.math_mode
         self.output_precision = program.output_precision
+        self.memory_mode = program.memory_mode
+        self.maxlen = program.maxlen
+        self.on_oom = program.on_oom
         self.extern_functions = {
             name: (tuple(params), ret, symbol, conv)
             for name, params, ret, symbol, conv in program.extern_functions
@@ -1672,6 +1985,23 @@ class Interpreter:
         for statement in program.statements:
             self._execute(statement, self.context, block_mode=None)
         return self.last
+
+    def _array_capacity_error(self, line: int, length: int) -> bool:
+        """按 #%maxlen 检查容量；返回 True 表示已记录可捕获的 (error)。
+
+        `#%on_oom = abort`（默认）直接终止；`= error` 则置状态为 error，
+        与 C 后端生成的 STATUS_ERROR 行为一致。
+        """
+        maxlen = getattr(self, "maxlen", 0)
+        if not maxlen or length <= maxlen:
+            return False
+        message = (
+            "array capacity exceeded: #%maxlen is smaller than the declared array"
+        )
+        if getattr(self, "on_oom", "abort") == "error":
+            self.last = Result("error", message)
+            return True
+        raise RuntimeError(line, message)
 
     def _execute(self, statement: Statement, context: Context, block_mode: str | None) -> None:
         kind = statement.kind
@@ -1703,7 +2033,7 @@ class Interpreter:
                     isinstance(body, ast.Call)
                     and isinstance(body.func, ast.Name)
                     and body.func.id.lower()
-                    in {"array_set", "array_push", "matrix_mul", "matrix_transpose",
+                    in {"array_set", "array_push", "array_fill", "array_copy", "bytes_from_str", "matrix_mul", "matrix_transpose",
                         "matrix2_inverse", "matrix3_inverse", "solve_linear"}
                 )
                 if not is_array_expression:
@@ -1730,6 +2060,8 @@ class Interpreter:
                 if matrix_value is not None:
                     if any(isinstance(value, complex) for value in matrix_value.data) and self.math_mode != "complex":
                         raise ValueError("complex matrix values require complex math mode")
+                    if self._array_capacity_error(statement.line, len(matrix_value.data)):
+                        return
                     context.matrix_arrays[name] = matrix_value.copy()
                     context.arrays.pop(name, None)
                     self.last = Result("ok", name)
@@ -1742,6 +2074,8 @@ class Interpreter:
                 )
                 if any(isinstance(value, complex) for value in array) and self.math_mode != "complex":
                     raise ValueError("complex array values require complex math mode")
+                if self._array_capacity_error(statement.line, len(array)):
+                    return
                 context.arrays[name] = [
                     value if isinstance(value, complex) else float(value)
                     for value in array
@@ -1756,12 +2090,7 @@ class Interpreter:
             return
         if kind == "import":
             component = str(statement.data["component"])
-            if component == "pe":
-                warning = f"line {statement.line}: pe is recognized but not implemented"
-                self.warnings.append(warning)
-                print(f"warning: {warning}", file=self.error_output)
-            else:
-                context.imports.add(component)
+            context.imports.add(component)
             self.last = Result("ok", component)
             return
         if kind == "encoding":
@@ -1791,8 +2120,6 @@ class Interpreter:
             component = str(statement.data["component"])
             if component not in context.imports and component not in {"execute", "math"}:
                 raise RuntimeError(statement.line, f"component '{component}' has not been imported")
-            if component == "pe":
-                raise RuntimeError(statement.line, "pe is recognized but not implemented")
             self.last = Result("ok", component)
             return
         if kind == "father":
@@ -1890,12 +2217,17 @@ class Interpreter:
                 "trapz", "simpson",
                 "pi_digits", "pi_str", "e_digits", "e_str",
                 "sqrt2_digits", "sqrt2_str",
+                "array_fill", "array_copy", "bytes_from_str", "str_from_bytes",
             }:
                 raise RuntimeError(statement.line, f"function name '{name}' is reserved")
-            self.functions[name] = (
+            body = statement.data.get("body")
+            expression = statement.data.get("expression")
+            self.functions[name] = UserFunction(
                 parameters,
-                str(statement.data["expression"]),
                 statement.line,
+                expression=str(expression) if expression is not None else None,
+                body=tuple(body) if isinstance(body, tuple) else None,
+                max_loop_iterations=self.max_loop_iterations,
             )
             self.last = Result("ok", name)
             return
@@ -1925,6 +2257,19 @@ class Interpreter:
             if self.last.status != "stop":
                 self.last = Result("ok")
             return
+        if kind == "require_ok":
+            # HOP 的「失败即停」守卫：前一步置为 (error) 时立刻终止并带步骤号。
+            step = int(statement.data.get("step") or 0)
+            label = f"HOP 第 {step} 步失败" if step else "上一步失败"
+            if self.last.status == "error":
+                detail = str(self.last.value or "").strip()
+                raise RuntimeError(
+                    statement.line,
+                    f"{label}: 前一步状态为 error"
+                    + (f"（{detail}）" if detail and detail != "error" else ""),
+                )
+            self.last = Result("ok", self.last.value)
+            return
         if kind == "tape_create":
             name = str(statement.data["name"])
             context.tapes[name] = Tape()
@@ -1953,6 +2298,9 @@ class Interpreter:
         if kind == "sleep":
             self.sleep(float(statement.data["seconds"]))
             self.last = Result("ok")
+            return
+        if kind == "ask":
+            self._ask(statement, context)
             return
         if kind == "print":
             self._print(statement, context)
@@ -2005,6 +2353,62 @@ class Interpreter:
             return
         if kind == "cdll":
             self._cdll(statement, context)
+            return
+        if kind == "record":
+            self.last = Result("ok", str(statement.data["name"]))
+            return
+        if kind == "asm":
+            raise RuntimeError(
+                statement.line,
+                "inline assembly blocks can only run through the C backend",
+            )
+        if kind == "gc_pin":
+            name = str(statement.data["name"])
+            if (
+                name not in context.arrays
+                and name not in context.matrix_arrays
+                and name not in context.variables
+            ):
+                raise RuntimeError(
+                    statement.line,
+                    f"gc_pin requires a declared array variable, got '{name}'",
+                )
+            if statement.data["pinned"]:
+                self.pinned_variables.add(name)
+            else:
+                self.pinned_variables.discard(name)
+            self.last = Result("ok", name)
+            return
+        if kind == "the_world":
+            action = str(statement.data["action"])
+            if action == "stop":
+                self.gc_stop_depth += 1
+            elif action == "start" and self.gc_stop_depth > 0:
+                self.gc_stop_depth -= 1
+            self.last = Result("ok", action)
+            return
+        if kind == "try":
+            try:
+                for child in statement.body:
+                    self._execute(child, context, block_mode=None)
+                    if self.last.status == "error":
+                        break
+                if self.last.status == "error":
+                    for child in statement.data.get("catch_body") or ():
+                        self._execute(child, context, block_mode=None)
+                        if self.last.status == "error":
+                            break
+            finally:
+                failed_before_finally = self.last.status == "error"
+                for child in statement.data.get("finally_body") or ():
+                    self._execute(child, context, block_mode=None)
+                    if self.last.status == "error":
+                        break
+                if failed_before_finally and self.last.status != "error":
+                    self.last = Result("error", self.last.value)
+            return
+        if kind == "operator":
+            self.last = Result("ok", str(statement.data["symbol"]))
             return
         raise RuntimeError(statement.line, f"unsupported statement kind: {kind}")
 
@@ -2165,6 +2569,7 @@ class Interpreter:
         status = "ok"
         iterations = 0
         self.last = Result("ok", name)
+        world_entry_depth = self.gc_stop_depth
         while True:
             if (
                 mode == "loop"
@@ -2192,6 +2597,13 @@ class Interpreter:
                 self._execute_sequence(else_body, context, block_mode=mode)
                 status = self.last.status
         self.pending_inheritance = False
+        if self.gc_stop_depth != world_entry_depth:
+            print(
+                f"warning: block '{name}' left The_world stop depth unbalanced; "
+                "restoring entry depth",
+                file=self.error_output,
+            )
+            self.gc_stop_depth = world_entry_depth
         self.last_block_status[name] = status
         self.last_block_status["status"] = status
         self.last = Result(status, name)
@@ -2375,6 +2787,123 @@ class Interpreter:
         else:
             print(value, file=self.output)
         self.last = Result("ok", value)
+
+    def _ask(self, statement: Statement, context: Context) -> None:
+        name = str(statement.data["name"])
+        variable = context.variables.get(name, Variable())
+        prompt = statement.data.get("prompt")
+        if isinstance(prompt, dict):
+            prompt_text = self._resolve_value(prompt, context, statement.line)
+            self.output.write(prompt_text)
+            self.output.flush()
+        if self.no_input:
+            context.variables[name] = Variable(b"", variable.encoding)
+            self.error_count += 1
+            self.last = Result("error", "error")
+            return
+        if statement.data.get("secret"):
+            line = self._read_secret_line()
+        else:
+            line = self.input_stream.readline(4098)
+        if line == "":
+            context.variables[name] = Variable(b"", variable.encoding)
+            self.error_count += 1
+            self.last = Result("error", "error")
+            return
+        line_complete = line.endswith(("\n", "\r"))
+        if line.endswith("\r\n"):
+            line = line[:-2]
+        elif line.endswith(("\n", "\r")):
+            line = line[:-1]
+        encoding = variable.encoding or "utf-8"
+        truncated = False
+        try:
+            encoded = line.encode(encoding)
+        except (LookupError, UnicodeEncodeError) as error:
+            raise RuntimeError(statement.line, f"input cannot be encoded using {encoding}: {error}") from error
+        if len(encoded) > 4096:
+            prefix: list[str] = []
+            used = 0
+            for character in line:
+                size = len(character.encode(encoding))
+                if used + size > 4096:
+                    break
+                prefix.append(character)
+                used += size
+            line = "".join(prefix)
+            truncated = True
+            while not line_complete:
+                remainder = self.input_stream.readline(4098)
+                if not remainder or remainder.endswith(("\n", "\r")):
+                    break
+        context.variables[name] = Variable(line.encode(encoding), variable.encoding)
+        if truncated:
+            self.error_count += 1
+            self.last = Result("error", line)
+        else:
+            self.last = Result("ok", line)
+
+    def _read_secret_line(self) -> str:
+        """读取一行不回显的密码；无法交互时回落到普通读取，返回带行尾的文本。"""
+        stream = self.input_stream
+        # 自定义输入流（测试、程序内重定向）本身不回显，按普通读取处理
+        if stream is not sys.stdin:
+            return stream.readline(4098)
+        try:
+            if not stream.isatty():
+                # stdin 被重定向（管道/文件）时没有终端回显，直接普通读取
+                return stream.readline(4098)
+        except (AttributeError, OSError, ValueError):
+            return stream.readline(4098)
+        try:
+            return self._read_console_secret()
+        except (EOFError, OSError, ValueError, KeyboardInterrupt):
+            # 终端不可用时不能让程序崩溃，退回普通读取
+            return stream.readline(4098)
+
+    def _read_console_secret(self) -> str:
+        if os.name == "nt":
+            return self._read_secret_windows()
+        import getpass
+
+        return getpass.getpass("") + "\n"
+
+    def _read_secret_windows(self) -> str:
+        """Windows 上用 msvcrt 逐字符读取，回显 * 且由 Enter 结束。"""
+        import msvcrt
+
+        characters: list[str] = []
+        while True:
+            key = msvcrt.getwch()
+            if key in ("\r", "\n"):
+                break
+            if key == "\x1a":  # Ctrl+Z 视为输入结束
+                if not characters:
+                    return ""
+                break
+            if key == "\x03":  # Ctrl+C 中止输入
+                raise KeyboardInterrupt
+            if key in ("\x00", "\xe0"):  # 方向键等功能键：丢弃后续扫描码
+                msvcrt.getwch()
+                continue
+            if key in ("\b", "\x7f"):
+                if characters:
+                    characters.pop()
+                    self._write_secret_echo("\b \b")
+                continue
+            characters.append(key)
+            self._write_secret_echo("*")
+        self._write_secret_echo("\n")
+        return "".join(characters) + "\n"
+
+    def _write_secret_echo(self, text: str) -> None:
+        try:
+            self.output.write(text)
+            flush = getattr(self.output, "flush", None)
+            if flush is not None:
+                flush()
+        except (OSError, ValueError):
+            pass
 
     def _if(self, statement: Statement, context: Context, block_mode: str | None) -> None:
         selector = str(statement.data["selector"])

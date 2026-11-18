@@ -1,0 +1,27 @@
+#% lib/array.cos —— 数组库
+#%
+#% 实测结论：数组不能作为用户函数的参数。
+#%   解释器版能跑通 arr_len(data)，但编译版在生成 C 时报：
+#%     invalid expression: unknown array 'a'
+#% 因此本文件不提供 arr_len / arr_sum / arr_mean 之类的包装函数，
+#% 否则 lib/array.cos 会是一个编不过的文件。数组统计请直接写内置调用：
+#%
+#%   array data = [1, 2, 3, 4]
+#%   math_run array_len(data) = ? -int64       # 元素个数
+#%   math_run array_sum(data) = ? -int64       # 求和
+#%   math_run mean(data) = ? -float64          # 均值
+#%   math_run std(data) = ? -float64           # 总体标准差
+#%   math_run median(data) = ? -float64        # 中位数
+#%   math_run max(data) = ? -float64           # 最大值（也接受 min）
+#%   math_run percentile(data, 90) = ? -float64
+#%   math_run dot(a, b) = ? -float64           # 点积，两个具名数组
+#%
+#% 具名数组写不带花括号的名字；push 进变量的数组用 {名字}：
+#%   push ({values} = array_copy(data))
+#%   math_run array_sum({values}) = ? -int64
+#%
+#% 数组不是标量，不能作为 math_run 的结果直接打印，也不能作为函数参数传递。
+#% 构造/修改数组只能走内置函数：
+#%   array_fill / array_copy / array_push / array_set / bytes_from_str
+#%
+#% 结论：本文件只保留说明，不定义函数，保证 include 后在两个后端都能通过。

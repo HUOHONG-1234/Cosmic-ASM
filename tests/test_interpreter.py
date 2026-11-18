@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import unittest
+import warnings
 
 from cosmic_interpreter.parser import ParseError, parse
 from cosmic_interpreter.runtime import ExitRequest, Interpreter, Result, RuntimeError
@@ -40,6 +41,78 @@ print (<{number}>)
         )
         self.assertEqual(interpreter.context.variables["implicit"].text(), "42")
         self.assertEqual(interpreter.context.variables["number"].text(), "43")
+
+    def test_ask_reads_line_and_flushes_prompt(self) -> None:
+        output = io.StringIO()
+        interpreter = Interpreter(output=output, input_stream=io.StringIO("Cosmos\n"))
+        interpreter.run(parse('ask ({answer}) (<{"Name: "}>)\nprint (<{answer}>)\n'))
+        self.assertEqual(output.getvalue(), "Name: Cosmos\n")
+        self.assertEqual(interpreter.last.status, "ok")
+
+    def test_ask_eof_and_no_input_store_empty_string_and_error_status(self) -> None:
+        for options in ({"input_stream": io.StringIO("")}, {"no_input": True}):
+            interpreter, _output, _errors = self.run_source("ask ({answer})\n", **options)
+            self.assertEqual(interpreter.context.variables["answer"].text(), "")
+            self.assertEqual(interpreter.last.status, "error")
+
+    def test_ask_truncates_input_to_4096_encoded_bytes_and_drains_line(self) -> None:
+        interpreter, _output, _errors = self.run_source(
+            "ask ({first})\nask ({second})\n",
+            input_stream=io.StringIO("x" * 4097 + "\nnext\n"),
+        )
+        self.assertEqual(len(interpreter.context.variables["first"].value or b""), 4096)
+        self.assertEqual(interpreter.context.variables["second"].text(), "next")
+        self.assertEqual(interpreter.last.status, "ok")
+
+    def test_string_library_functions(self) -> None:
+        cases = {
+            'substr_bytes("宇宙", 0, 3)': "宇",
+            'find("a宇宙b", "宇")': "1",
+            'trim("  Cosmic  ")': "Cosmic",
+            'upper("aBc-宇宙")': "ABC-宇宙",
+            'lower("AbC-宇宙")': "abc-宇宙",
+            'upper("straße-𐐨")': "STRASSE-𐐀",
+            'lower("İΣ")': "i\u0307σ",
+            'replace("a-b-a", "a", "x")': "x-b-x",
+        }
+        for expression, expected in cases.items():
+            with self.subTest(expression=expression):
+                interpreter, _output, _errors = self.run_source(
+                    f"math_run {expression} = ?\n"
+                )
+                self.assertEqual(interpreter.last.value, expected)
+
+    def test_string_library_rejects_invalid_replace_and_negative_slice(self) -> None:
+        for expression in ('replace("x", "", "y")', 'substr_bytes("x", -1, 1)'):
+            with self.subTest(expression=expression):
+                with self.assertRaises(RuntimeError):
+                    self.run_source(f"math_run {expression} = ?\n")
+
+    def test_array_fill_and_copy(self) -> None:
+        interpreter, _output, _errors = self.run_source(
+            "array values = array_fill(4, 3)\n"
+            "array copy = array_copy(values)\n"
+            "array copy = array_set(copy, 0, 9)\n"
+            "math_run array_sum(values) = ?\n"
+        )
+        self.assertEqual(interpreter.last.value, "12")
+
+    def test_string_and_bytes_conversion(self) -> None:
+        interpreter, _output, _errors = self.run_source(
+            'array data = bytes_from_str("宇宙")\n'
+            "math_run str_from_bytes(data) = ?\n"
+        )
+        self.assertEqual(interpreter.last.value, "宇宙")
+        self.assertEqual(interpreter.context.arrays["data"], [229, 174, 135, 229, 174, 153])
+
+    def test_parser_accepts_only_supported_targets_and_rejects_duplicates(self) -> None:
+        self.assertEqual(parse("#%target = riscv64-linux-gnu\n").target, "riscv64-linux-gnu")
+        for source, message in (
+            ("#%target = rv32imac-unknown-elf\n", "unsupported target"),
+            ("#%target = host\n#%target = host\n", "target can only be declared once"),
+        ):
+            with self.subTest(source=source), self.assertRaisesRegex(ParseError, message):
+                parse(source)
 
     def test_variable_reference_requires_a_prior_assignment_or_declaration(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "empty variable 'missing'"):
@@ -295,6 +368,705 @@ start(normal) = {math}
             "math_run factorial(10) = ?\n"
         )
         self.assertEqual(interpreter.last.value, "3628800")
+
+    def test_recursive_expression_function_reports_language_depth_error(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "function recursion depth exceeded"):
+            self.run_source(
+                "function descend(n) = choose(n <= 0, 0, descend(n - 1))\n"
+                "math_run descend(300) = ?\n"
+            )
+
+    def test_multi_statement_function_local_scope_and_return(self) -> None:
+        interpreter, _output, _errors = self.run_source(
+            "function transform(value)\n"
+            "{\n"
+            "let doubled = {value} * 2\n"
+            "let adjusted = {doubled} + 3\n"
+            "return {adjusted}\n"
+            "}\n"
+            "math_run transform(5) = ? -int64\n"
+        )
+        self.assertEqual(interpreter.last.value, "13")
+        self.assertNotIn("doubled", interpreter.context.variables)
+        self.assertNotIn("adjusted", interpreter.context.variables)
+
+    def test_return_outside_function_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ParseError, "return is only valid inside a function"):
+            parse("return 3\n")
+
+    def test_function_body_requires_return(self) -> None:
+        with self.assertRaisesRegex(ParseError, "function body must end with return expression"):
+            parse("function incomplete(value)\n{\nlet next = value + 1\n}\n")
+
+    def test_function_body_rejects_duplicate_or_shadowing_locals(self) -> None:
+        for source in (
+            "function f(value)\n{\nlet value = 2\nreturn value\n}\n",
+            "function f(value)\n{\nlet next = 1\nlet next = 2\nreturn next\n}\n",
+        ):
+            with self.subTest(source=source):
+                with self.assertRaisesRegex(ParseError, "already declared"):
+                    parse(source)
+
+    def test_function_body_reports_unterminated_body(self) -> None:
+        with self.assertRaisesRegex(ParseError, "unterminated function body"):
+            parse("function f(value)\n{\nreturn value\n")
+
+    def test_function_return_must_be_last_statement(self) -> None:
+        with self.assertRaisesRegex(ParseError, "return must be the final statement"):
+            parse(
+                "function f(value)\n"
+                "{\n"
+                "return value\n"
+                "let later = 2\n"
+                "}\n"
+            )
+
+    def test_function_body_rejects_implicit_caller_variable_access(self) -> None:
+        with self.assertRaisesRegex(ParseError, "cannot access caller variables"):
+            parse(
+                "function isolated(value)\n"
+                "{\n"
+                "return {value} + {outside}\n"
+                "}\n"
+            )
+
+    def test_multi_statement_function_can_recurse(self) -> None:
+        interpreter, _output, _errors = self.run_source(
+            "function factorial(n)\n"
+            "{\n"
+            "let previous = {n} - 1\n"
+            "return choose({n} <= 1, 1, {n} * factorial({previous}))\n"
+            "}\n"
+            "math_run factorial(10) = ? -int64\n"
+        )
+        self.assertEqual(interpreter.last.value, "3628800")
+
+    def test_multi_statement_function_conditional_returns(self) -> None:
+        interpreter, _output, _errors = self.run_source(
+            "function absolute(value)\n"
+            "{\n"
+            "if ({value} < 0)\n"
+            "{\n"
+            "let negated = 0 - {value}\n"
+            "return {negated}\n"
+            "}\n"
+            "else\n"
+            "{\n"
+            "let unchanged = {value}\n"
+            "return {unchanged}\n"
+            "}\n"
+            "}\n"
+            "math_run absolute(-12) = ? -int64\n"
+        )
+        self.assertEqual(interpreter.last.value, "12")
+        positive, _output, _errors = self.run_source(
+            "function absolute(value)\n"
+            "{\n"
+            "if ({value} < 0)\n"
+            "{\n"
+            "let negated = 0 - {value}\n"
+            "return {negated}\n"
+            "}\n"
+            "else\n"
+            "{\n"
+            "let unchanged = {value}\n"
+            "return {unchanged}\n"
+            "}\n"
+            "}\n"
+            "math_run absolute(12) = ? -int64\n"
+        )
+        self.assertEqual(positive.last.value, "12")
+
+    def test_function_conditional_without_else_falls_through_to_zero(self) -> None:
+        interpreter, _output, _errors = self.run_source(
+            "function positive_only(value)\n"
+            "{\n"
+            "if ({value} > 0)\n"
+            "{\n"
+            "return {value}\n"
+            "}\n"
+            "}\n"
+            "math_run positive_only(-3) = ? -int64\n"
+        )
+        self.assertEqual(interpreter.last.value, "0")
+        positive, _output, _errors = self.run_source(
+            "function positive_only(value)\n"
+            "{\n"
+            "if ({value} > 0)\n"
+            "{\n"
+            "return {value}\n"
+            "}\n"
+            "}\n"
+            "math_run positive_only(7) = ? -int64\n"
+        )
+        self.assertEqual(positive.last.value, "7")
+
+    def test_multi_statement_function_supports_nested_conditional_returns(self) -> None:
+        interpreter, _output, _errors = self.run_source(
+            "function classify(value)\n"
+            "{\n"
+            "if ({value} < 0)\n"
+            "{\n"
+            "return -1\n"
+            "}\n"
+            "else\n"
+            "{\n"
+            "if ({value} == 0)\n"
+            "{\n"
+            "return 0\n"
+            "}\n"
+            "else\n"
+            "{\n"
+            "return 1\n"
+            "}\n"
+            "}\n"
+            "}\n"
+            "math_run classify(0) = ? -int64\n"
+        )
+        self.assertEqual(interpreter.last.value, "0")
+
+    def test_function_body_while_loop_with_continue_and_break(self) -> None:
+        interpreter, _output, _errors = self.run_source(
+            "function sum_odd(limit)\n"
+            "{\n"
+            "let total = 0\n"
+            "let index = 0\n"
+            "while ({index} < {limit})\n"
+            "{\n"
+            "set index = {index} + 1\n"
+            "if ({index} % 2 == 0)\n"
+            "{\n"
+            "continue\n"
+            "}\n"
+            "set total = {total} + {index}\n"
+            "}\n"
+            "return {total}\n"
+            "}\n"
+            "math_run sum_odd(10) = ? -int64\n"
+        )
+        self.assertEqual(interpreter.last.value, "25")
+        early, _output, _errors = self.run_source(
+            "function first_multiple(start)\n"
+            "{\n"
+            "let value = {start}\n"
+            "while (1 == 1)\n"
+            "{\n"
+            "if ({value} % 7 == 0)\n"
+            "{\n"
+            "break\n"
+            "}\n"
+            "set value = {value} + 1\n"
+            "}\n"
+            "return {value}\n"
+            "}\n"
+            "math_run first_multiple(10) = ? -int64\n"
+        )
+        self.assertEqual(early.last.value, "14")
+
+    def test_function_body_early_return_inside_conditional(self) -> None:
+        interpreter, _output, _errors = self.run_source(
+            "function clamp(value)\n"
+            "{\n"
+            "if ({value} < 0)\n"
+            "{\n"
+            "return 0\n"
+            "}\n"
+            "if ({value} > 10)\n"
+            "{\n"
+            "return 10\n"
+            "}\n"
+            "return {value}\n"
+            "}\n"
+            "math_run clamp(-4) = ? -int64\n"
+        )
+        self.assertEqual(interpreter.last.value, "0")
+        upper, _output, _errors = self.run_source(
+            "function clamp(value)\n"
+            "{\n"
+            "if ({value} < 0)\n"
+            "{\n"
+            "return 0\n"
+            "}\n"
+            "if ({value} > 10)\n"
+            "{\n"
+            "return 10\n"
+            "}\n"
+            "return {value}\n"
+            "}\n"
+            "math_run clamp(42) = ? -int64\n"
+        )
+        self.assertEqual(upper.last.value, "10")
+
+    def test_function_body_loop_with_nested_function_calls(self) -> None:
+        interpreter, _output, _errors = self.run_source(
+            "function double(value) = value * 2\n"
+            "function total_doubled(limit)\n"
+            "{\n"
+            "let total = 0\n"
+            "let index = 0\n"
+            "while ({index} < {limit})\n"
+            "{\n"
+            "set index = {index} + 1\n"
+            "set total = {total} + double({index})\n"
+            "}\n"
+            "return {total}\n"
+            "}\n"
+            "math_run total_doubled(4) = ? -int64\n"
+        )
+        self.assertEqual(interpreter.last.value, "20")
+
+    def test_function_body_loop_respects_iteration_limit(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "loop iteration limit exceeded"):
+            self.run_source(
+                "function spin()\n"
+                "{\n"
+                "let count = 0\n"
+                "while (1 == 1)\n"
+                "{\n"
+                "set count = {count} + 1\n"
+                "}\n"
+                "return {count}\n"
+                "}\n"
+                "math_run spin() = ? -int64\n",
+                max_loop_iterations=5,
+            )
+
+    def test_function_body_rejects_misplaced_statements(self) -> None:
+        cases = {
+            "declare function local variables before any if or while statement": (
+                "function f(value)\n"
+                "{\n"
+                "if (value > 0)\n"
+                "{\n"
+                "let inner = 1\n"
+                "}\n"
+                "return value\n"
+                "}\n"
+            ),
+            "unknown local 'missing'": (
+                "function f(value)\n"
+                "{\n"
+                "set missing = 1\n"
+                "return value\n"
+                "}\n"
+            ),
+            "break is only valid inside a function while loop": (
+                "function f(value)\n"
+                "{\n"
+                "break\n"
+                "return value\n"
+                "}\n"
+            ),
+            "continue is only valid inside a function while loop": (
+                "function f(value)\n"
+                "{\n"
+                "continue\n"
+                "return value\n"
+                "}\n"
+            ),
+        }
+        for message, source in cases.items():
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ParseError, message):
+                    parse(source)
+
+    def test_nested_function_captures_enclosing_values_by_value(self) -> None:
+        interpreter, _output, _errors = self.run_source(
+            "function outer(seed)\n"
+            "{\n"
+            "let factor = 2\n"
+            "function apply(value) = value * factor + seed\n"
+            "let first = apply(3)\n"
+            "set factor = 10\n"
+            "let second = apply(3)\n"
+            "return first * 100 + second\n"
+            "}\n"
+            "math_run outer(5) = ? -int64\n"
+        )
+        self.assertEqual(interpreter.last.value, "1135")
+        self.assertEqual(interpreter.context.variables.get("factor"), None)
+
+    def test_nested_function_rejects_unknown_names_and_duplicate_declarations(self) -> None:
+        cases = {
+            "cannot access caller variables": (
+                "function outer(value)\n"
+                "{\n"
+                "function inner(item) = item + {outside}\n"
+                "return inner(value)\n"
+                "}\n"
+            ),
+            "local 'helper' is already declared": (
+                "function outer(value)\n"
+                "{\n"
+                "let helper = 2\n"
+                "function helper(item) = item + 1\n"
+                "return helper(value)\n"
+                "}\n"
+            ),
+        }
+        for message, source in cases.items():
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ParseError, message):
+                    parse(source)
+
+    def test_record_values_have_value_semantics(self) -> None:
+        interpreter, _output, _errors = self.run_source(
+            "record Point { x, y }\n"
+            "function compute()\n"
+            "{\n"
+            "let original = Point(3, 4)\n"
+            "let copy = original\n"
+            "set copy.x = 6\n"
+            "set original.y = 10\n"
+            "return copy.x * 1000 + copy.y * 100 + original.x * 10 + original.y\n"
+            "}\n"
+            "math_run compute() = ? -int64\n"
+        )
+        self.assertEqual(interpreter.last.value, "6440")
+        self.assertNotIn("original__x", interpreter.context.variables)
+
+    def test_record_operator_overloads_are_statically_resolved(self) -> None:
+        interpreter, _output, _errors = self.run_source(
+            "record Point { x, y }\n"
+            "operator + Point = { left.x + right.x, left.y + right.y }\n"
+            "operator * Point = { left.x * right.x - left.y * right.y, left.x * right.y + left.y * right.x }\n"
+            "function compute()\n"
+            "{\n"
+            "let a = Point(1, 2)\n"
+            "let b = Point(3, 4)\n"
+            "let sum = a + b\n"
+            "let product = a * b\n"
+            "return sum.x * 1000 + sum.y * 100 + product.x * 10 + product.y\n"
+            "}\n"
+            "math_run compute() = ? -int64\n"
+        )
+        self.assertEqual(interpreter.last.value, "4560")
+
+    def test_record_declarations_report_invalid_usage(self) -> None:
+        cases = {
+            "record field names must be unique": "record Point { x, x }\n",
+            "record 'Point' is already declared": (
+                "record Point { x }\nrecord Point { y }\n"
+            ),
+            "unknown record 'Missing'": "operator + Missing = { left.x }\n",
+            "has no field 'z'": (
+                "record Point { x }\n"
+                "function f()\n"
+                "{\n"
+                "let p = Point(1)\n"
+                "return p.z\n"
+                "}\n"
+            ),
+            "cannot be used as a scalar value": (
+                "record Point { x }\n"
+                "function f()\n"
+                "{\n"
+                "let p = Point(1)\n"
+                "return p\n"
+                "}\n"
+            ),
+            "has no operator '-'": (
+                "record Point { x }\n"
+                "function f()\n"
+                "{\n"
+                "let a = Point(1)\n"
+                "let b = Point(2)\n"
+                "let c = a - b\n"
+                "return c.x\n"
+                "}\n"
+            ),
+            "record operator mixes 'Point' and 'Other'": (
+                "record Point { x }\n"
+                "record Other { x }\n"
+                "operator + Point = { left.x + left.x }\n"
+                "function f()\n"
+                "{\n"
+                "let a = Point(1)\n"
+                "let b = Other(2)\n"
+                "let c = a + b\n"
+                "return c.x\n"
+                "}\n"
+            ),
+            "must produce 2 value": (
+                "record Point { x, y }\n"
+                "operator + Point = { left.x }\n"
+            ),
+            "may only reference left and right": (
+                "record Point { x }\n"
+                "operator + Point = { other.x }\n"
+            ),
+        }
+        for message, source in cases.items():
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ParseError, message):
+                    parse(source)
+
+    def test_try_catch_finally_handles_error_status(self) -> None:
+        source = (
+            "try\n"
+            "{\n"
+            "ask ({line})\n"
+            "push ({after_ask} = {\"continued\"})\n"
+            "}\n"
+            "catch\n"
+            "{\n"
+            "push ({caught} = {\"caught\"})\n"
+            "}\n"
+            "finally\n"
+            "{\n"
+            "push ({cleanup} = {\"done\"})\n"
+            "}\n"
+            "print (<{caught}>)\n"
+            "print (<{cleanup}>)\n"
+        )
+        interpreter, output, _errors = self.run_source(source, no_input=True)
+        self.assertEqual(output, "caught\ndone\n")
+        self.assertNotIn("after_ask", interpreter.context.variables)
+
+    def test_try_without_error_skips_catch_but_runs_finally(self) -> None:
+        interpreter, output, _errors = self.run_source(
+            "try\n"
+            "{\n"
+            "push ({body} = {\"ran\"})\n"
+            "}\n"
+            "catch\n"
+            "{\n"
+            "push ({caught} = {\"caught\"})\n"
+            "}\n"
+            "finally\n"
+            "{\n"
+            "push ({cleanup} = {\"done\"})\n"
+            "}\n"
+            "print (<{body}>)\n"
+            "print (<{cleanup}>)\n",
+            no_input=True,
+        )
+        self.assertEqual(output, "ran\ndone\n")
+        self.assertEqual(interpreter.last.status, "ok")
+
+    def test_try_without_catch_propagates_error_after_finally(self) -> None:
+        interpreter, output, _errors = self.run_source(
+            "try\n"
+            "{\n"
+            "ask ({line})\n"
+            "}\n"
+            "finally\n"
+            "{\n"
+            "push ({cleanup} = {\"done\"})\n"
+            "}\n"
+            "if up = (error) goto (push ({failed} = {\"error\"}))\n"
+            "print (<{cleanup}>)\n"
+            "print (<{failed}>)\n",
+            no_input=True,
+        )
+        self.assertEqual(output, "done\nerror\n")
+
+    def test_try_requires_catch_or_finally_and_stays_at_top_level(self) -> None:
+        with self.assertRaisesRegex(ParseError, "try requires a catch or finally block"):
+            parse("try\n{\nprint (<{\"x\"}>)\n}\n")
+        with self.assertRaisesRegex(ParseError, "invalid try"):
+            parse("try {\n}\n")
+        with self.assertRaisesRegex(ParseError, "'catch' must follow a try block"):
+            parse("catch\n{\n}\n")
+
+    def test_namespaces_and_use_aliases(self) -> None:
+        interpreter, output, _errors = self.run_source(
+            "#%namespace = sort\n"
+            "function quick(values) = values * 2\n"
+            "#%namespace = mathx\n"
+            "function quick(values) = values * 10\n"
+            "#%namespace = global\n"
+            "#%use = sort.quick as doubled\n"
+            "math_run doubled(4) = ? -int64\n"
+            "if up = (ok) goto (push ({a} = {(in = up)}))\n"
+            "math_run sort::quick(3) = ? -int64\n"
+            "if up = (ok) goto (push ({b} = {(in = up)}))\n"
+            "math_run mathx::quick(3) = ? -int64\n"
+            "if up = (ok) goto (push ({c} = {(in = up)}))\n"
+            "print (<{a}>)\n"
+            "print (<{b}>)\n"
+            "print (<{c}>)\n"
+        )
+        self.assertEqual(output, "8\n6\n30\n")
+
+    def test_namespace_and_alias_errors(self) -> None:
+        cases = {
+            "is not defined": (
+                "#%namespace = global\n"
+                "#%use = sort.missing as helper\n"
+            ),
+            "conflicts with an existing function": (
+                "#%name = {value}\n"
+                "function helper(value) = value\n"
+                "#%namespace = sort\n"
+                "function quick(value) = value\n"
+                "#%namespace = global\n"
+                "#%use = sort.quick as helper\n"
+            ),
+            "namespace declarations are only valid at the top level": (
+                "start(normal) = {block}\n"
+                "{\n"
+                "#%namespace = inner\n"
+                "}\n"
+            ),
+        }
+        for message, source in cases.items():
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ParseError, message):
+                    parse(source)
+
+    def test_gc_pin_and_the_world_track_language_state(self) -> None:
+        interpreter, output, _errors = self.run_source(
+            "#gc = semi\n"
+            "array data = [1, 2, 3]\n"
+            "gc_pin ({data})\n"
+            "The_world (stop)\n"
+            "The_world (stop)\n"
+            "The_world (start)\n"
+            "math_run array_sum(data) = ? -int64\n"
+            "if up = (ok) goto (push ({total} = {(in = up)}))\n"
+            "The_world (force)\n"
+            "The_world (start)\n"
+            "print (<{total}>)\n"
+        )
+        self.assertEqual(output, "6\n")
+        self.assertIn("data", interpreter.pinned_variables)
+        self.assertEqual(interpreter.gc_stop_depth, 0)
+
+    def test_memory_directives_are_recorded_and_mark_gc_is_accepted(self) -> None:
+        program = parse(
+            "#gc = mark\n"
+            "#%memory = arena\n"
+            "#%maxlen = 32\n"
+            "#%on_oom = error\n"
+            "math_run 1 + 1 = ? -int32\n"
+        )
+        self.assertEqual(program.gc_mode, "mark")
+        self.assertEqual(program.memory_mode, "arena")
+        self.assertEqual(program.maxlen, 32)
+        self.assertEqual(program.on_oom, "error")
+        static_program = parse("#%memory = static\n#%maxlen = 8\nmath_run 1 + 1 = ?\n")
+        self.assertEqual(static_program.memory_mode, "static")
+
+    def test_maxlen_aborts_by_default_and_recovers_with_on_oom_error(self) -> None:
+        source = (
+            "#%maxlen = 2\n"
+            "array data = [1, 2, 3]\n"
+            "math_run array_len(data) = ? -int32\n"
+        )
+        with self.assertRaisesRegex(RuntimeError, "array capacity exceeded"):
+            self.run_source(source)
+
+        interpreter, output, _errors = self.run_source(
+            "#%maxlen = 2\n#%on_oom = error\n"
+            "array data = [1, 2, 3]\n"
+            "if up = (error) goto (push ({state} = {\"oom\"}))\n"
+            'print (<{state}>)\n'
+        )
+        self.assertEqual(output, "oom\n")
+        self.assertNotIn("data", interpreter.context.arrays)
+
+        _interpreter, output, _errors = self.run_source(
+            "#%maxlen = 4\narray data = [1, 2, 3]\nmath_run array_sum(data) = ? -int32\n"
+            "if up = (ok) goto (push ({total} = {(in = up)}))\n"
+            "print (<{total}>)\n"
+        )
+        self.assertEqual(output, "6\n")
+
+    def test_gc_and_asm_declarations_are_validated(self) -> None:
+        cases = {
+            "gc mode must be none, semi, or mark": "#gc = weird\n",
+            "memory mode must be heap, arena, or static": "#%memory = paged\n",
+            "memory mode 'static' requires #%maxlen": "#%memory = static\n",
+            "maxlen must be between 1 and 1000000": "#%maxlen = 0\n",
+            "on_oom must be abort or error": "#%on_oom = panic\n",
+            "gc_pin requires #%memory = heap": (
+                "#%memory = arena\narray data = [1, 2]\ngc_pin ({data})\n"
+            ),
+            "is not supported with atom blocks": (
+                "#%memory = arena\nlock {guard}\n{\nmath_run 1 + 1 = ? -int32\n}\n"
+            ),
+            "#%asm requires an architecture": "#%asm = x86_64\n#asm\n{\n    nop\n}\n",
+            "#%asm clobber list must include memory": (
+                "#%asm = x86_64 (clobber: rax)\n#asm\n{\n    nop\n}\n"
+            ),
+            "requires arm64": "#%asm = arm64 (clobber: memory)\n#asm\n{\n    nop\n}\n",
+            "#%asm must be immediately followed by #asm": (
+                "#%asm = x86_64 (clobber: memory)\nmath_run 1 + 1 = ?\n#asm\n{\n    nop\n}\n"
+            ),
+            "gc_pin requires a declared array variable": (
+                "gc_pin ({missing})\nmath_run 1 + 1 = ?\n"
+            ),
+        }
+        for message, source in cases.items():
+            with self.subTest(message=message):
+                with self.assertRaisesRegex((ParseError, RuntimeError), message):
+                    self.run_source(source)
+
+    def test_function_declarations_inside_blocks_are_rejected(self) -> None:
+        for source in (
+            "start(normal) = {block}\n{\nfunction inner(x) = x + 1\n}\n",
+            "start(normal) = {block}\n{\nfunction inner(x)\n{\nreturn x\n}\n}\n",
+        ):
+            with self.subTest(source=source):
+                with self.assertRaisesRegex(ParseError, "must be at the top level"):
+                    parse(source)
+
+    def test_asm_clobber_list_warns_about_missing_registers(self) -> None:
+        with self.assertWarnsRegex(UserWarning, "references rax"):
+            parse("#%asm = x86_64 (clobber: memory)\n#asm\n{\n    mov rax, 1\n}\n")
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            parse("#%asm = x86_64 (clobber: rax, memory)\n#asm\n{\n    mov rax, 1\n}\n")
+        self.assertEqual(caught, [])
+
+    def test_unbalanced_the_world_inside_block_warns_and_restores_depth(self) -> None:
+        interpreter, output, errors = self.run_source(
+            "start(normal) = {leak}\n"
+            "{\n"
+            "The_world (stop)\n"
+            "push ({x} = {\"1\"})\n"
+            "}\n"
+            "math_run 1 + 1 = ? -int32\n"
+            "if up = (ok) goto (push ({y} = {(in = up)}))\n"
+            "print (<{y}>)\n"
+        )
+        self.assertEqual(output, "2\n")
+        self.assertIn("left The_world stop depth unbalanced", errors)
+        self.assertEqual(interpreter.gc_stop_depth, 0)
+
+    def test_gc_pin_accepts_bytes_variables(self) -> None:
+        interpreter, output, _errors = self.run_source(
+            "bytes payload = bytes_from_str(\"abc\")\n"
+            "gc_pin ({payload})\n"
+            "The_world (stop)\n"
+            "math_run bytes_len(payload) = ? -int32\n"
+            "if up = (ok) goto (push ({length} = {(in = up)}))\n"
+            "The_world (start)\n"
+            "print (<{length}>)\n"
+        )
+        self.assertEqual(output, "3\n")
+        self.assertIn("payload", interpreter.pinned_variables)
+
+    def test_record_operator_accepts_constructor_operands(self) -> None:
+        interpreter, _output, _errors = self.run_source(
+            "record Point { x, y }\n"
+            "operator + Point = { left.x + right.x, left.y + right.y }\n"
+            "function compute()\n"
+            "{\n"
+            "let base = Point(1, 2)\n"
+            "let shifted = base + Point(3, 4)\n"
+            "return shifted.x * 10 + shifted.y\n"
+            "}\n"
+            "math_run compute() = ? -int64\n"
+        )
+        self.assertEqual(interpreter.last.value, "46")
+
+    def test_inline_assembly_is_rejected_by_interpreter(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "inline assembly blocks"):
+            self.run_source(
+                "#%asm = x86_64 (clobber: memory)\n#asm\n{\n    nop\n}\n"
+            )
 
     def test_generic_expression_function_infers_numeric_arguments(self) -> None:
         interpreter, _output, _errors = self.run_source(
@@ -589,7 +1361,7 @@ dog(open) = {ok}
         self.assertIn("hello_world\n", output)
         self.assertIn("sample-directory\n", output)
         self.assertTrue(output.endswith("2\n"))
-        self.assertIn("pe is recognized but not implemented", errors)
+        self.assertNotIn("pe is recognized but not implemented", errors)
 
     def test_missing_and_killed_variables_have_error_status(self) -> None:
         source = """\
@@ -603,8 +1375,11 @@ print(<{item}>) -GBK
         self.assertEqual(interpreter.last.value, "killer")
 
     def test_pe_is_reported_as_unsupported(self) -> None:
-        _interpreter, _output, errors = self.run_source("#pe\n")
-        self.assertIn("pe is recognized but not implemented", errors)
+        with self.assertRaisesRegex(
+            ParseError,
+            r"line 1: component 'pe' is not supported \(removed in v6\)",
+        ):
+            parse("#pe\n")
 
     def test_external_commands_can_be_disabled(self) -> None:
         source = """\
@@ -1304,6 +2079,59 @@ nuclear_reactor {main} = {chain}
         with self.assertRaisesRegex(RuntimeError, "value is not a matrix"):
             self.run_source("array flat = [1,2,3,4,5,6]\nmath_run matrix_rows(flat) = ?\n")
 
+    def test_ask_secret_reads_line_without_echo(self) -> None:
+        output = io.StringIO()
+        interpreter = Interpreter(output=output, input_stream=io.StringIO("s3cret\n"))
+        interpreter.run(parse("ask ({密码}) -secret\n"))
+        self.assertEqual(interpreter.context.variables["密码"].text(), "s3cret")
+        self.assertEqual(interpreter.last.status, "ok")
+        self.assertEqual(output.getvalue(), "")
+
+    def test_ask_secret_keeps_prompt_and_plain_ask_unchanged(self) -> None:
+        output = io.StringIO()
+        interpreter = Interpreter(
+            output=output, input_stream=io.StringIO("s3cret\nplain\n")
+        )
+        interpreter.run(
+            parse(
+                'ask ({pwd}) (<{"密码: "}>) -secret\n'
+                "print (<{pwd}>)\n"
+                "ask ({name})\n"
+                "print (<{name}>)\n"
+            )
+        )
+        self.assertEqual(output.getvalue(), "密码: s3cret\nplain\n")
+        self.assertEqual(interpreter.context.variables["pwd"].text(), "s3cret")
+        self.assertEqual(interpreter.context.variables["name"].text(), "plain")
+        # -secret 只是语句标记，不能当作变量名或表达式参与解析
+        self.assertTrue(parse("ask ({pwd}) -secret\n").statements[0].data["secret"])
+        self.assertTrue(parse('ask ({pwd}) -secret (<{"P: "}>)\n').statements[0].data["secret"])
+        self.assertFalse(parse("ask ({pwd})\n").statements[0].data["secret"])
+
+    def test_ask_secret_no_input_stores_empty_and_errors(self) -> None:
+        interpreter, output, _errors = self.run_source("ask ({pwd}) -secret\n", no_input=True)
+        self.assertEqual(interpreter.context.variables["pwd"].text(), "")
+        self.assertEqual(interpreter.last.status, "error")
+        self.assertEqual(output, "")
+
+    def test_ask_secret_falls_back_when_terminal_unavailable(self) -> None:
+        from unittest.mock import patch
+
+        class FakeTerminal(io.StringIO):
+            def isatty(self) -> bool:
+                return True
+
+        stream = FakeTerminal("s3cret\n")
+        output = io.StringIO()
+        with patch.object(
+            Interpreter, "_read_console_secret", side_effect=OSError("no terminal")
+        ):
+            with patch("sys.stdin", stream):
+                interpreter = Interpreter(output=output)
+                interpreter.run(parse("ask ({pwd}) -secret\n"))
+        self.assertEqual(interpreter.context.variables["pwd"].text(), "s3cret")
+        self.assertEqual(interpreter.last.status, "ok")
+        self.assertEqual(output.getvalue(), "")
 
 
 if __name__ == "__main__":

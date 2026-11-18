@@ -2,8 +2,6 @@
 
 > 我要说什么来着?
 
-<img src="Cosmic_logo_for_Markdown-1.svg" alt="Cosmic ASM logo" width="320">
-
 [![Tests](https://img.shields.io/badge/tests-418%20passed%2C%201%20skipped-brightgreen)]()
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)]()
 [![GCC](https://img.shields.io/badge/backend-GCC%20%7C%20C11-orange)]()

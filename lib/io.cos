@@ -1,16 +1,14 @@
 #% lib/io.cos —— 文件读写库
 #%
-#% 实测结论：read_text / write_text 不能在用户函数体内工作（两条后端不一致）：
-#%   解释器：function file_bytes(p) = strlen(read_text(p)) 可以跑；
-#%   编译版：strlen 只接受字符串字面量或 var 变量，参数会报
-#%           invalid expression: strlen expects a string literal, variable, or char_at result
-#% 而且 read_text(...) 不能直接嵌在 strlen/find/line_count 里（编译版同样只接受
-#% 字面量或 var）。所以本文件不提供 file_bytes(path) 之类的包装函数，避免留下
-#% 编不过的文件。
+#% 实测结论：read_text / write_text 不能作为**用户函数参数**（函数参数只能是数值），
+#% 因此不提供 file_bytes(path) 之类的包装函数，避免留下编不过的文件。
 #%
-#% 正确写法（两条后端一致）：先把内容读进文本变量，再对变量做查询。
-#% 读取上限 16 MiB。
+#% 但 v8.1 起，返回文本的内置可以直接互相嵌套，两条后端一致：
+#%   math_run strlen(read_text("index.json")) = ? -int64
+#%   math_run find(read_text("a.txt"), "ERROR") = ? -int64
+#%   math_run line_count(trim(read_text("a.txt"))) = ? -int64
 #%
+#% 需要多次查询同一份内容时，先读进变量更省：
 #%   math_run read_text("index.json") = ?
 #%   push ({TXT} = {(in = up)})
 #%   math_run strlen({TXT}) = ? -int64                # 文件字节数

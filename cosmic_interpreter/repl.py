@@ -134,22 +134,22 @@ def _slice_from(text: str, cells: int) -> str:
 
 # ---------------------------------------------------------------- 帮助面板
 
-_HELP_TITLE = "帮助 · Cosmic ASM v8 REPL"
+_HELP_TITLE = "Help - Cosmic ASM v8 REPL"
 
 _HELP_LINES: tuple[str, ...] = (
-    "快捷键",
-    "  F1         打开/关闭本帮助",
-    "  Esc        关闭帮助",
-    "  Enter      执行当前输入",
-    "  ← / →      左右移动光标",
-    "  Home/End   跳到行首 / 行尾",
-    "  Backspace  删除光标前一个字",
-    "  ↑ / ↓      翻阅输入历史",
-    "  Ctrl+L     清屏",
-    "  Ctrl+Q     退出 REPL",
+    "Key bindings",
+    "  F1         open/close this help",
+    "  Esc        close help",
+    "  Enter      run the current input",
+    "  Left/Right move the cursor",
+    "  Home/End   jump to start/end of line",
+    "  Backspace  delete the character before the cursor",
+    "  Up/Down    browse input history",
+    "  Ctrl+L     clear the screen",
+    "  Ctrl+Q     quit the REPL",
     "",
-    "示例",
-    '  print (<{"你好，Cosmic"}>)',
+    "Examples",
+    '  print (<{"hello, cosmic"}>)',
     "  math_run 1 + 1 = ? -int64",
     "  array_push({a}, 5)",
 )
@@ -193,7 +193,7 @@ class ReplSession:
         self._history_limit = max(1, int(history_limit))
 
         self._append("Cosmic ASM v8 REPL")
-        self._append("输入语句后回车执行；F1 帮助，Ctrl+Q 退出。")
+        self._append("Type a statement and press Enter; F1 for help, Ctrl+Q to quit.")
         self._append("")
 
     # -- 生命周期 ------------------------------------------------------
@@ -346,7 +346,7 @@ class ReplSession:
         for line in output.splitlines():
             self._append(line)
         for index, line in enumerate(error.splitlines()):
-            self._append(("错误: " + line) if index == 0 else "  " + line)
+            self._append(("error: " + line) if index == 0 else "  " + line)
 
     def _run(self, source: str) -> tuple[str, str]:
         try:

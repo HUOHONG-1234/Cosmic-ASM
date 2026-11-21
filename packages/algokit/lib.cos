@@ -1,0 +1,56 @@
+#% algokit 1.0.0 —— sorting and lookup helpers
+#%
+#% Arrays cannot be passed to user functions in the compiled backend, so each
+#% helper takes the elements as separate numeric arguments (three values).
+#% For arbitrary-length arrays call the builtins directly, for example
+#% array_sum(sort_array(data)).
+#%
+#%   #%include = "packages/algokit/lib.cos"
+#%   math_run sorted_sum(3, 1, 2) = ? -int64   # 6
+#%   math_run contains(3, 1, 2, 7) = ? -int64  # 0
+
+#% Sum after sorting three values.
+function sorted_sum(a, b, c)
+{
+    let ordered = sort_array([c, a, b])
+    return array_sum(ordered)
+}
+
+#% Sum after reversing three values.
+function reverse_sum(a, b, c)
+{
+    let flipped = reverse_array([c, a, b])
+    return array_sum(flipped)
+}
+
+#% Median of three values (sorted middle element).
+function sorted_median(a, b, c)
+{
+    let ordered = sort_array([c, a, b])
+    return array_at(ordered, 1)
+}
+
+#% 1 when value is one of the three arguments, otherwise 0.
+function contains(a, b, c, value)
+{
+    let index = array_index_of([c, a, b], value)
+    if (index < 0)
+    {
+        return 0
+    }
+    return 1
+}
+
+#% Smallest of three values.
+function smallest(a, b, c)
+{
+    let ordered = sort_array([c, a, b])
+    return array_at(ordered, 0)
+}
+
+#% Largest of three values.
+function largest(a, b, c)
+{
+    let ordered = sort_array([c, a, b])
+    return array_at(ordered, 2)
+}

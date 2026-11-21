@@ -20,19 +20,39 @@ math_run factorial(5) = ? -int64        # 120
 `#%include` 的路径相对于**声明所在文件**；绝对路径、循环包含、超过 16 层都会报错。
 同一个文件被多次 include 会重复定义函数，因此只在需要处引入一次。
 
-## 硬约束（决定 lib 能提供什么）
+## 语言能力（v9 之后）
 
-1. **用户函数只能返回数值。** `function 名称(参数) = 表达式` 与语句体函数都只产生数值；
-   字符串结果无法从用户函数返回。需要字符串结果时，直接调用内置函数
-   （`substr_bytes` / `trim` / `upper` / `lower` / `replace` / `read_text` /
-   `str_from_bytes` / `char_at`）。
-2. **编译后端的字符串内置只接受字面量或 `var` 文本变量**，不接受函数参数。
-   实测报错：`invalid expression: strlen expects a string literal, variable, or char_at result`。
-   所以 `text_len(文本)` 这类包装函数在编译版不可用。
-3. **编译后端的 `ord` 只接受字面量、`var` 变量或 `chr(...)`**，不接受 `char_at(...)`。
-   取码点请先放入单字符 `var`：`math_run ord({CH}) = ?`。
-4. **数组不能作为用户函数参数**（编译版报 `unknown array 'a'`）。数组统计请直接写
-   `array_sum(data)` 之类的内置调用。
+v9 Delta 拆掉了三道墙，`lib/` 的写法也跟着变了：
+
+1. **用户函数可以接收文本参数、返回文本。** 所以 `text_len(t)` / `text_upper(t)` 这类
+   包装现在可以真正写出来，两个后端输出一致：
+
+   ```cos
+   #%include = "lib/text.cos"
+   var TEXT = {"Cosmic ASM"}
+   math_run text_len({TEXT}) = ? -int64        # 9
+   math_run text_upper({TEXT}) = ?             # COSMIC ASM
+   ```
+
+   未加标注的参数会按函数体内的用法自动推断类型（`function f(t) = upper(t)` 的 `t` 是文本）。
+   需要明确类型时写 `t : text` / `-> text`。
+2. **用户函数可以接收数组参数、返回数组。**
+
+   ```cos
+   function total(values : array) = array_sum(values)
+   function build(size) = array_fill(size, 7)
+   math_run total(build(3)) = ? -int64         # 21
+   ```
+3. **记录可以跨函数传递**（参数与返回值都可以是记录）：
+
+   ```cos
+   record Money { amount, currency }
+   function add_money(a : Money, b : Money) -> Money
+   {
+       return Money(a.amount + b.amount, a.currency)
+   }
+   ```
+4. **`ord` 接受字面量、`var` 变量、`chr(...)`，也接受返回文本的内置调用**（如 `ord(char_at({T}, 0))`）。
 5. **函数名/变量名首字符必须是 ASCII 字母或下划线**（`[A-Za-z_]\w*`）。中文只能出现在
    第一个字符之后，因此库函数名用英文；注释仍可用中文。
 6. **函数体内的局部名必须在最外层、任何 `if`/`while` 之前用 `let` 声明**；块内不能写
@@ -47,7 +67,24 @@ math_run factorial(5) = ? -int64        # 120
 
 ### lib/text.cos
 
-文本查询本身只能用内置函数（见上面第 2 条），本文件提供的是「码点 → 数值」的纯数值函数：
+v9 起分为两组。
+
+文本包装（参数/返回值可以是文本）：
+
+| 函数 | 说明 |
+|---|---|
+| `text_len(t)` | 文本长度（码点） |
+| `text_lines(t)` | 行数 |
+| `text_upper(t)` / `text_lower(t)` | 大小写转换 |
+| `text_trim(t)` | 去掉首尾空白 |
+| `text_count(t, word)` | 子串出现次数 |
+| `text_has(t, word)` | 是否包含子串 |
+| `text_starts(t, prefix)` / `text_ends(t, suffix)` | 前后缀判断 |
+| `text_repeat(t, times)` | 重复文本 |
+| `text_field(t, sep, index)` | 按分隔符取第 index 个字段 |
+| `text_fields(t, sep)` | 按分隔符切分后的字段数 |
+
+码点判定（纯数值，先用 `ord({CH})` 取码点）：
 
 | 函数 | 中文名 | 说明 |
 |---|---|---|
@@ -85,15 +122,16 @@ math_run array_sum({values}) = ? -int64        # 变量里的数组用 {名字}
 
 ### lib/io.cos
 
-`read_text`/`write_text` 不能嵌在 `strlen`/`find`/`line_count` 里，也不能在函数体内使用；
-本文件**只保留说明**，不定义函数。正确顺序是「先读进变量，再查询」：
+`read_text`/`write_text` 现在也能作为**用户函数参数**（v9 起文本参数/返回都支持），
+同时保留 v8.1 的嵌套写法：`strlen(read_text(...))`、`find(read_text(...), 字串)`、
+`line_count(trim(read_text(...)))` 两端一致。本文件不定义函数，只保留用法说明：
 
 ```cos
 #%include = "lib/io.cos"
+math_run strlen(read_text("index.json")) = ? -int64   # 直接嵌套
 math_run read_text("index.json") = ?
-push ({TXT} = {(in = up)})
-math_run strlen({TXT}) = ? -int64              # 字节数
-math_run line_count({TXT}) = ? -int64          # 行数
+push ({TXT} = {(in = up)})                            # 或先读进变量再多次查询
+math_run line_count({TXT}) = ? -int64
 ```
 
 ### lib/term.cos

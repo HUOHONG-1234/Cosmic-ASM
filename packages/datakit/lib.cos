@@ -1,0 +1,23 @@
+#% datakit 1.0.0 —— numeric CSV helpers
+#%
+#% The compiled backend only accepts string literals or text variables in its
+#% string builtins, never function parameters. These helpers therefore take
+#% the already-computed counts and turn them into CSV geometry:
+#%
+#%   #%include = "packages/datakit/lib.cos"
+#%   push ({CSV} = {"name,score\nann,10\nbob,30"})
+#%   math_run csv_row_count(line_count({CSV})) = ? -int64                # 3
+#%   math_run csv_col_count(count_text(line_at({CSV}, 1), ",")) = ? -int64  # 2
+#%   math_run csv_data_row_count(line_count({CSV}), 1) = ? -int64        # 2
+
+#% Total rows from the number of lines (trailing newline is not a row).
+function csv_row_count(line_total) = line_total
+
+#% Columns from the number of separators in the first row.
+function csv_col_count(separator_count) = separator_count + 1
+
+#% Data rows after removing header rows.
+function csv_data_row_count(line_total, header_rows) = line_total - header_rows
+
+#% Width of one row measured in fields, including separators.
+function csv_row_width(field_count) = field_count

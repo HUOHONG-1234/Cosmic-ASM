@@ -15,7 +15,7 @@ class CosmicCliTests(unittest.TestCase):
         with redirect_stdout(buffer):
             self.assertEqual(cosmic_cli.main(["version"]), 0)
         output = buffer.getvalue()
-        self.assertIn("cosmic 0.1.0", output)
+        self.assertIn("cosmic 2.0.0", output)
         self.assertIn("python", output)
 
     def test_run_dispatches_to_interpreter(self):
@@ -66,10 +66,13 @@ class CosmicCliTests(unittest.TestCase):
         try:
             self.assertEqual(cosmic_cli.main(["pkg", "install"]), 0)
             self.assertEqual(cosmic_cli.main(["index", "--index", "x.json"]), 0)
+            self.assertEqual(cosmic_cli.main(["install", "mathx"]), 0)
         finally:
             cosmic_cli._pkg = original
+        # `pkg` 只是命名空间，不能把它本身转发给 cosp
         self.assertEqual(calls[0], ["install"])
         self.assertEqual(calls[1], ["index", "--index", "x.json"])
+        self.assertEqual(calls[2], ["install", "mathx"])
 
     def test_repl_subcommands_use_repl_module(self):
         called: list[int] = []

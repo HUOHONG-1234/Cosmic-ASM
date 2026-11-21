@@ -9,6 +9,7 @@ import math
 import os
 import random
 import re
+import secrets
 import shlex
 import shutil
 import subprocess
@@ -51,6 +52,11 @@ class UserFunction:
     body: tuple[Statement, ...] | None = None
     max_loop_iterations: int | None = None
     captures: tuple[str, ...] = ()
+    # 记录类型参数 -> 字段名：进入函数时把字段展开成 ``param__field``。
+    parameter_fields: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    # 函数名（小写）与「是否返回数组/记录」缓存；None 表示还没算过。
+    name: str = ""
+    returns_array: bool | None = None
 
 
 @dataclass
@@ -110,6 +116,8 @@ class Context:
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False, compare=False)
     lock_depth: int = field(default=0, repr=False, compare=False)
     lock_owner: str | None = field(default=None, repr=False, compare=False)
+    # 循环体嵌套深度：v10 B4 用它判断 `var` 是否可以覆盖式重新初始化。
+    loop_depth: int = field(default=0, repr=False, compare=False)
 
     def inherit(self) -> Context:
         return Context(
@@ -415,12 +423,163 @@ def _unicode_at(value: str, index: float) -> str:
     return value[position]
 
 
+def _integer_argument(value: object, message: str) -> int:
+    if isinstance(value, (str, list, complex)) or not float(value).is_integer():
+        raise ValueError(message)
+    return int(value)
+
+
+_TEXT_RESULT_LIMIT = 16 * 1024 * 1024
+
+
+# 这些内置返回数组；静态判定用，避免运行期「先试数组、失败再重算」的 2^n 求值。
+_ARRAY_PRODUCER_BUILTINS = frozenset({
+    "array_fill", "array_set", "array_push", "array_copy", "sort_array",
+    "reverse_array", "bytes_from_str", "random_bytes", "matrix_mul",
+    "matrix_transpose", "matrix2_inverse", "matrix3_inverse", "solve_linear",
+})
+
+
+def _function_returns_array(
+    entry: UserFunction,
+    functions: dict[str, UserFunction] | None,
+    _guard: frozenset[str] = frozenset(),
+) -> bool:
+    """用户函数是否返回数组（或记录）值；结果缓存在 ``entry.returns_array``。"""
+    if entry.returns_array is not None:
+        return entry.returns_array
+    name = entry.name
+    if name and name in _guard:
+        return False
+    guard = _guard | {name} if name else _guard
+    expressions: list[str] = []
+    if entry.expression is not None:
+        expressions.append(entry.expression)
+    for statement in _walk_body_statements(entry.body or ()):
+        if statement.kind == "function_return":
+            expressions.append(str(statement.data["expression"]))
+    result = False
+    for expression in expressions:
+        try:
+            tree = ast.parse(expression, mode="eval").body
+        except SyntaxError:
+            continue
+        if _node_returns_array(tree, functions, guard):
+            result = True
+            break
+    # UserFunction 是 frozen dataclass；缓存字段用 object.__setattr__ 写入。
+    object.__setattr__(entry, "returns_array", result)
+    return result
+
+
+def _node_returns_array(
+    node: ast.expr,
+    functions: dict[str, UserFunction] | None,
+    guard: frozenset[str] = frozenset(),
+) -> bool:
+    if isinstance(node, ast.List):
+        return True
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        callee = node.func.id.lower()
+        if callee in _ARRAY_PRODUCER_BUILTINS:
+            return True
+        if callee == "choose" and len(node.args) == 3:
+            return any(
+                _node_returns_array(argument, functions, guard)
+                for argument in node.args[1:]
+            )
+        if functions and callee in functions:
+            return _function_returns_array(functions[callee], functions, guard)
+    return False
+
+
+def _may_produce_array(
+    node: ast.expr,
+    values: dict[str, MathValue],
+    functions: dict[str, UserFunction] | None,
+) -> bool:
+    """静态判断节点是否可能产生数组值，取代运行期试错重跑。"""
+    if isinstance(node, ast.List):
+        return True
+    if isinstance(node, ast.Name):
+        return isinstance(values.get(node.id), list)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        callee = node.func.id.lower()
+        if callee == "choose" and len(node.args) == 3:
+            return any(
+                _may_produce_array(argument, values, functions)
+                for argument in node.args[1:]
+            )
+        if callee in _ARRAY_PRODUCER_BUILTINS:
+            return True
+        if callee == "choose":
+            return False
+        if functions and callee in functions:
+            return _function_returns_array(functions[callee], functions)
+    return False
+
+
+_RECORD_LITERAL_RE = re.compile(r"^__record_(.+?)__$")
+
+
+def _record_literal_type(name: str) -> str | None:
+    """``__record_Point__`` → ``Point``；不是记录字面量则返回 None。"""
+    match = _RECORD_LITERAL_RE.match(name)
+    return match.group(1) if match else None
+
+
+def _eval_value_node(
+    node: ast.expr,
+    values: dict[str, MathValue],
+    *,
+    complex_mode: bool,
+    functions: dict[str, UserFunction] | None = None,
+    call_depth: int = 0,
+    bitwise_allowed: bool = True,
+    uint32: bool = False,
+) -> MathValue:
+    """静态判定后只走一条求值路径（避免历史版本的「试错重跑」导致 2^n）。"""
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        if _record_literal_type(node.func.id.lower()) is not None:
+            # 记录值：字段按位置取值，元素可以是文本（数组装不下文本）。
+            return [
+                _eval_value_node(
+                    argument,
+                    values,
+                    complex_mode=complex_mode,
+                    functions=functions,
+                    call_depth=call_depth,
+                    bitwise_allowed=bitwise_allowed,
+                    uint32=uint32,
+                )
+                for argument in node.args
+            ]
+    if _may_produce_array(node, values, functions):
+        return _eval_array_literal(
+            node,
+            values,
+            complex_mode=complex_mode,
+            functions=functions,
+            call_depth=call_depth,
+        )
+    return _eval_numeric_node(
+        node,
+        values,
+        complex_mode=complex_mode,
+        functions=functions,
+        call_depth=call_depth,
+        bitwise_allowed=bitwise_allowed,
+        uint32=uint32,
+    )
+
+
 def _eval_array_literal(
     node: ast.expr,
     values: dict[str, MathValue],
     *,
     complex_mode: bool,
     functions: dict[str, UserFunction] | None = None,
+    call_depth: int = 0,
 ) -> list[float | complex]:
     if isinstance(node, ast.Name) and isinstance(values.get(node.id), list):
         return values[node.id]
@@ -454,6 +613,26 @@ def _eval_array_literal(
             return _eval_array_literal(
                 node.args[0], values, complex_mode=complex_mode, functions=functions
             ).copy()
+        if function_name in {"sort_array", "reverse_array"}:
+            if len(node.args) != 1 or node.keywords:
+                raise ValueError(f"{function_name} expects one array")
+            source = _eval_array_literal(
+                node.args[0], values, complex_mode=complex_mode, functions=functions
+            )
+            # 返回新数组，入参保持不变
+            return sorted(source) if function_name == "sort_array" else list(reversed(source))
+        if function_name == "random_bytes":
+            if len(node.args) != 1 or node.keywords:
+                raise ValueError("random_bytes expects one length")
+            count = _integer_argument(
+                _eval_numeric_node(
+                    node.args[0], values, complex_mode=complex_mode, functions=functions
+                ),
+                "random_bytes length must be an integer",
+            )
+            if not 0 <= count <= 1_000_000:
+                raise ValueError("random_bytes length must be between 0 and 1000000")
+            return [secrets.randbelow(256) for _ in range(count)]
         if function_name in {
             "matrix_mul", "matrix_transpose", "matrix2_inverse", "matrix3_inverse",
         }:
@@ -524,6 +703,19 @@ def _eval_array_literal(
                 raise ValueError("arrays may contain at most one million items")
             result.append(value)
             return result
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        function_name = node.func.id.lower()
+        if functions and function_name in functions:
+            produced = _eval_numeric_node(
+                node,
+                values,
+                complex_mode=complex_mode,
+                functions=functions,
+                call_depth=call_depth,
+            )
+            if isinstance(produced, list):
+                return produced
+            raise ValueError(f"{function_name} did not return an array")
     if not isinstance(node, ast.List) or len(node.elts) > 1_000_000:
         raise ValueError("array argument must be a list literal or an array_set/array_push result")
     result: list[float | complex] = []
@@ -1145,10 +1337,28 @@ def _eval_numeric_node(
                 return bytes(int(value) for value in values).decode("utf-8")
             except UnicodeDecodeError as error:
                 raise ValueError("str_from_bytes requires valid UTF-8 bytes") from error
-        if function_name in {"substr_bytes", "find", "trim", "upper", "lower", "replace", "line_count"}:
+        if function_name in {"text_concat", "text_join", "to_text"}:
+            return _eval_text_builder(
+                function_name,
+                node,
+                values,
+                complex_mode=complex_mode,
+                functions=functions,
+                call_depth=call_depth,
+                bitwise_allowed=bitwise_allowed,
+                uint32=uint32,
+            )
+        if function_name in {
+            "substr_bytes", "find", "trim", "upper", "lower", "replace", "line_count",
+            "split_count", "field", "count_text", "contains_text", "starts_with",
+            "ends_with", "repeat_text", "pad_left", "pad_right", "line_at", "to_number",
+        }:
             arities = {
                 "substr_bytes": 3, "find": 2, "trim": 1,
                 "upper": 1, "lower": 1, "replace": 3, "line_count": 1,
+                "split_count": 2, "field": 3, "count_text": 2, "contains_text": 2,
+                "starts_with": 2, "ends_with": 2, "repeat_text": 2,
+                "pad_left": 3, "pad_right": 3, "line_at": 2, "to_number": 1,
             }
             if node.keywords or len(node.args) != arities[function_name]:
                 raise ValueError(f"{function_name} expects {arities[function_name]} argument(s)")
@@ -1192,6 +1402,81 @@ def _eval_numeric_node(
                 return "".join(character.upper() for character in text)
             if function_name == "lower":
                 return "".join(character.lower() for character in text)
+            if function_name == "split_count":
+                separator = arguments[1]
+                if not isinstance(separator, str):
+                    raise ValueError("split_count expects a string separator")
+                if not separator:
+                    raise ValueError("split_count separator must not be empty")
+                return text.count(separator) + 1
+            if function_name == "field":
+                separator = arguments[1]
+                if not isinstance(separator, str):
+                    raise ValueError("field expects a string separator")
+                if not separator:
+                    raise ValueError("field separator must not be empty")
+                index = _integer_argument(arguments[2], "field index must be an integer")
+                if index < 1:
+                    raise ValueError("field index must be a positive integer")
+                segments = text.split(separator)
+                if index > len(segments):
+                    raise ValueError("field index is outside the text")
+                return segments[index - 1]
+            if function_name == "count_text":
+                needle = arguments[1]
+                if not isinstance(needle, str):
+                    raise ValueError("count_text expects a string needle")
+                if not needle:
+                    raise ValueError("count_text needle must not be empty")
+                return text.count(needle)
+            if function_name == "contains_text":
+                needle = arguments[1]
+                if not isinstance(needle, str):
+                    raise ValueError("contains_text expects a string needle")
+                return 1 if not needle or needle in text else 0
+            if function_name in {"starts_with", "ends_with"}:
+                affix = arguments[1]
+                if not isinstance(affix, str):
+                    raise ValueError(f"{function_name} expects a string argument")
+                matched = text.startswith(affix) if function_name == "starts_with" else text.endswith(affix)
+                return 1 if matched else 0
+            if function_name == "repeat_text":
+                count = _integer_argument(arguments[1], "repeat_text count must be an integer")
+                if count < 0:
+                    raise ValueError("repeat_text count must not be negative")
+                if count and len(text.encode("utf-8")) > _TEXT_RESULT_LIMIT // count:
+                    raise ValueError("repeat_text result exceeds the 16 MiB limit")
+                return text * count
+            if function_name in {"pad_left", "pad_right"}:
+                width = _integer_argument(arguments[1], f"{function_name} width must be an integer")
+                if width < 0:
+                    raise ValueError(f"{function_name} width must not be negative")
+                pad = arguments[2]
+                if not isinstance(pad, str) or len(pad) != 1:
+                    raise ValueError(f"{function_name} padding must be a single character")
+                missing = width - len(text)
+                if missing <= 0:
+                    return text
+                filler = pad * missing
+                return filler + text if function_name == "pad_left" else text + filler
+            if function_name == "line_at":
+                index = _integer_argument(arguments[1], "line_at index must be an integer")
+                if index < 1:
+                    raise ValueError("line_at index must be a positive integer")
+                if not text:
+                    raise ValueError("line_at index is outside the text")
+                lines = text.split("\n")
+                if text.endswith("\n"):
+                    lines.pop()
+                if index > len(lines):
+                    raise ValueError("line_at index is outside the text")
+                line = lines[index - 1]
+                return line[:-1] if line.endswith("\r") else line
+            if function_name == "to_number":
+                body = text.strip()
+                if not re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)", body):
+                    raise ValueError("to_number requires an integer or decimal number")
+                return int(body) if "." not in body else float(body)
             source, replacement = arguments[1:]
             if not isinstance(source, str) or not isinstance(replacement, str):
                 raise ValueError("replace expects string arguments")
@@ -1232,7 +1517,7 @@ def _eval_numeric_node(
                 bitwise_allowed=bitwise_allowed,
                 uint32=uint32,
             )
-        if function_name in {"array_set", "array_push", "bytes_from_str"}:
+        if function_name in {"array_set", "array_push", "bytes_from_str", "sort_array", "reverse_array", "random_bytes"}:
             return _eval_array_literal(
                 node, values, complex_mode=complex_mode, functions=functions
             )
@@ -1251,6 +1536,44 @@ def _eval_numeric_node(
             if not 0 <= position < len(array):
                 raise ValueError("array index is outside the array")
             return array[position]
+        if function_name == "array_index_of":
+            if len(node.args) != 2 or node.keywords:
+                raise ValueError("array_index_of expects an array and a value")
+            array = _eval_array_literal(node.args[0], values, complex_mode=complex_mode, functions=functions)
+            value = _eval_numeric_node(
+                node.args[1], values, complex_mode=complex_mode, functions=functions,
+                call_depth=call_depth, bitwise_allowed=bitwise_allowed, uint32=uint32,
+            )
+            if isinstance(value, list):
+                raise ValueError("array_index_of value must be numeric")
+            for index, element in enumerate(array):
+                if isinstance(value, complex) or isinstance(element, complex):
+                    if element == value:
+                        return index
+                elif float(element) == float(value):
+                    return index
+            return -1
+        if function_name == "random_secure":
+            if len(node.args) != 2 or node.keywords:
+                raise ValueError("random_secure expects a lower and an upper bound")
+            arguments = [
+                _eval_numeric_node(
+                    argument, values, complex_mode=complex_mode, functions=functions,
+                    call_depth=call_depth, bitwise_allowed=bitwise_allowed, uint32=uint32,
+                )
+                for argument in node.args
+            ]
+            low = _integer_argument(arguments[0], "random_secure bounds must be integers")
+            high = _integer_argument(arguments[1], "random_secure bounds must be integers")
+            if low > high:
+                raise ValueError("random_secure requires low <= high")
+            if abs(low) >= 2**53 or abs(high) >= 2**53:
+                raise ValueError("random_secure bounds must be below 2^53 in magnitude")
+            return low + secrets.randbelow(high - low + 1)
+        if function_name == "now_ms":
+            if node.args or node.keywords:
+                raise ValueError("now_ms expects no arguments")
+            return time.time_ns() // 1_000_000
         if function_name == "dot":
             if len(node.args) != 2 or node.keywords:
                 raise ValueError("dot expects two arrays")
@@ -1469,10 +1792,10 @@ def _eval_numeric_node(
             parameters = entry.parameters
             if len(node.args) != len(parameters):
                 raise ValueError(f"{function_name} expects {len(parameters)} argument(s)")
-            if call_depth >= 256:
+            if call_depth >= _CALL_DEPTH_LIMIT:
                 raise ValueError("function recursion depth exceeded")
             arguments = [
-                _eval_numeric_node(
+                _eval_value_node(
                     argument,
                     values,
                     complex_mode=complex_mode,
@@ -1481,48 +1804,17 @@ def _eval_numeric_node(
                 )
                 for argument in node.args
             ]
-            if entry.body is not None:
-                return _eval_function_body(
-                    entry,
-                    arguments,
-                    values,
-                    complex_mode=complex_mode,
-                    functions=functions,
-                    call_depth=call_depth + 1,
-                    bitwise_allowed=bitwise_allowed,
-                    uint32=uint32,
-                )
-            local_values = {
-                capture: values[capture]
-                for capture in entry.captures
-                if capture in values
-            }
-            missing = [
-                capture for capture in entry.captures if capture not in local_values
-            ]
-            if missing:
-                raise ValueError(
-                    f"captured value '{missing[0]}' is not available in this scope"
-                )
-            local_values.update(zip(parameters, arguments))
-            transformed, _variables = transform_braced_expression(str(entry.expression))
-            try:
-                function_node = ast.parse(transformed, mode="eval").body
-            except SyntaxError as error:
-                raise ValueError(f"invalid expression in function declared at line {entry.line}") from error
-            if isinstance(function_node, (ast.Compare, ast.BoolOp)):
-                return _condition_value(
-                    function_node,
-                    local_values,
-                    functions=functions,
-                )
-            return _eval_numeric_node(
-                function_node,
-                local_values,
+            # 单表达式函数与语句体函数统一走 trampoline：调用边界只有一处，
+            # 深递归才不会消耗 Python 栈（v10 B8）。
+            return _eval_function_body(
+                entry,
+                arguments,
+                values,
                 complex_mode=complex_mode,
                 functions=functions,
                 call_depth=call_depth + 1,
-                bitwise_allowed=bitwise_allowed, uint32=uint32,
+                bitwise_allowed=bitwise_allowed,
+                uint32=uint32,
             )
         complex_functions = {
                 "sqrt": cmath.sqrt,
@@ -1559,6 +1851,8 @@ def _eval_numeric_node(
 _STRING_ARGUMENT_FUNCTIONS = frozenset({
     "ord", "strlen", "char_at", "read_text", "write_text",
     "substr_bytes", "find", "trim", "upper", "lower", "replace", "line_count",
+    "split_count", "field", "count_text", "contains_text", "starts_with",
+    "ends_with", "repeat_text", "pad_left", "pad_right", "line_at", "to_number",
 })
 _TAKE_ALL_ARGUMENTS_FUNCTIONS = frozenset({"write_text", "replace"})
 _VARIABLE_TOKEN_RE = re.compile(r"\b(?:var_[A-Za-z_]\w*|tape_[A-Za-z_]\w*)\b")
@@ -1670,6 +1964,7 @@ def _evaluate_expression(
             and tree.body.func.id.lower() in {
                 "array_set", "array_push", "bytes_from_str", "matrix_mul", "matrix_transpose",
                 "matrix2_inverse", "matrix3_inverse", "array_fill", "array_copy",
+                "sort_array", "reverse_array", "random_bytes",
             }
         ):
             raise ValueError(
@@ -1733,6 +2028,76 @@ def _format_numeric(value: int | float | complex | str, precision: int = 15) -> 
     return format(value, f".{precision}g")
 
 
+# 数值转文本时使用的有效位数；Interpreter.run 会按 #%precision 覆盖。
+_TEXT_PRECISION = 15
+
+# 函数体内 print 的出口；Interpreter.run 会把它指向当前实例的输出流。
+_ACTIVE_EMIT = None
+
+
+def _emit_print(text: str, encoding: str | None = None) -> None:
+    if _ACTIVE_EMIT is None:
+        raise ValueError("print is not available in this context")
+    _ACTIVE_EMIT(text, encoding)
+
+
+def _eval_text_builder(
+    function_name: str,
+    node: ast.Call,
+    values: dict[str, MathValue],
+    *,
+    complex_mode: bool,
+    functions: dict[str, UserFunction] | None,
+    call_depth: int,
+    bitwise_allowed: bool,
+    uint32: bool,
+) -> str:
+    """v10 B5：``text_concat`` / ``to_text`` / ``text_join``。
+
+    没有通用拼接就写不了「往缓冲区追加」的代码生成函数，所以这三个是自举的前置条件。
+    """
+    arities = {"text_concat": 2, "to_text": 1, "text_join": 2}
+    if node.keywords or len(node.args) != arities[function_name]:
+        raise ValueError(f"{function_name} expects {arities[function_name]} argument(s)")
+
+    def number(argument: ast.expr) -> MathValue:
+        return _eval_numeric_node(
+            argument,
+            values,
+            complex_mode=complex_mode,
+            functions=functions,
+            call_depth=call_depth,
+            bitwise_allowed=bitwise_allowed,
+            uint32=uint32,
+        )
+
+    if function_name == "to_text":
+        value = number(node.args[0])
+        if isinstance(value, list):
+            raise ValueError("to_text expects a scalar value")
+        return _format_numeric(value, _TEXT_PRECISION)
+    if function_name == "text_concat":
+        left, right = (number(argument) for argument in node.args)
+        for part in (left, right):
+            if not isinstance(part, str):
+                raise ValueError("text_concat expects two text arguments")
+        combined = left + right
+        if len(combined.encode("utf-8")) > _TEXT_RESULT_LIMIT:
+            raise ValueError("text_concat result exceeds the 16 MiB limit")
+        return combined
+    separator = number(node.args[1])
+    if not isinstance(separator, str):
+        raise ValueError("text_join expects a text separator")
+    array = _eval_array_literal(
+        node.args[0], values, complex_mode=complex_mode, functions=functions
+    )
+    pieces = [_format_numeric(item, _TEXT_PRECISION) for item in array]
+    combined = separator.join(pieces)
+    if len(combined.encode("utf-8")) > _TEXT_RESULT_LIMIT:
+        raise ValueError("text_join result exceeds the 16 MiB limit")
+    return combined
+
+
 class _FunctionBreak(Exception):
     pass
 
@@ -1770,92 +2135,417 @@ def _eval_function_body(
     bitwise_allowed: bool = False,
     uint32: bool = False,
 ) -> MathValue:
-    frame: dict[str, MathValue] = {}
-    for capture in entry.captures:
-        if capture not in values:
-            raise ValueError(f"captured value '{capture}' is not available in this scope")
-        frame[capture] = values[capture]
-    frame.update(zip(entry.parameters, arguments))
-    nested_functions = dict(functions or {})
-    for statement in _walk_body_statements(entry.body or ()):
-        if statement.kind != "function_nested":
-            continue
-        nested_functions[str(statement.data["name"]).lower()] = UserFunction(
-            tuple(str(value) for value in statement.data["parameters"]),
-            statement.line,
-            expression=str(statement.data["expression"]),
-            captures=tuple(str(value) for value in statement.data["captures"]),
-        )
-    functions = nested_functions
-    limit = entry.max_loop_iterations
+    """驱动函数体（语句执行是一条生成器链，见 ``_drive``）。
 
-    def evaluate(expression: str, line: int) -> MathValue:
-        try:
-            node = ast.parse(expression, mode="eval").body
-        except SyntaxError as error:
-            raise ValueError(f"invalid expression at line {line}: {error}") from error
-        return _eval_numeric_node(
-            node,
-            frame,
+    v10 之前这里是普通递归函数，Cosmic 每递归一层就吃掉 6~10 个 Python 栈帧，
+    约 200 层就 ``RecursionError``。现在函数体是生成器，帧分配在堆上，递归深度
+    只受内存限制。
+    """
+    return _drive(
+        _body_gen(
+            entry,
+            arguments,
+            values,
             complex_mode=complex_mode,
             functions=functions,
             call_depth=call_depth,
             bitwise_allowed=bitwise_allowed,
             uint32=uint32,
         )
+    )
 
-    def condition(expression: str, line: int) -> bool:
+
+class _EvalRequest:
+    """「请对这段表达式求值」——生成器把工作交还给驱动器。"""
+
+    __slots__ = ("expression", "line", "frame", "context", "condition")
+
+    def __init__(
+        self,
+        expression: str,
+        line: int,
+        frame: dict[str, MathValue],
+        context: "_EvalContext",
+        condition: bool = False,
+    ) -> None:
+        self.expression = expression
+        self.line = line
+        self.frame = frame
+        self.context = context
+        self.condition = condition
+
+
+class _CallRequest:
+    """「请进入这个用户函数」——调用边界，由驱动器压一帧，不用 Python 栈。"""
+
+    __slots__ = ("entry", "arguments", "values", "context")
+
+    def __init__(
+        self,
+        entry: UserFunction,
+        arguments: list[MathValue],
+        values: dict[str, MathValue],
+        context: "_EvalContext",
+    ) -> None:
+        self.entry = entry
+        self.arguments = arguments
+        self.values = values
+        self.context = context
+
+
+class _EvalContext:
+    """一次求值共享的模式开关（复数 / 位运算 / uint32 / 递归深度）。"""
+
+    __slots__ = (
+        "complex_mode",
+        "functions",
+        "call_depth",
+        "bitwise_allowed",
+        "uint32",
+        "call_depth_limit",
+    )
+
+    def __init__(
+        self,
+        *,
+        complex_mode: bool,
+        functions: dict[str, UserFunction] | None,
+        call_depth: int,
+        bitwise_allowed: bool,
+        uint32: bool,
+    ) -> None:
+        self.complex_mode = complex_mode
+        self.functions = functions
+        self.call_depth = call_depth
+        self.bitwise_allowed = bitwise_allowed
+        self.uint32 = uint32
+        # 递归上限：解释器层不再受 Python 栈限制，因此给一个更贴近实用的上限。
+        self.call_depth_limit = _CALL_DEPTH_LIMIT
+
+    def deeper(self) -> "_EvalContext":
+        nested = _EvalContext(
+            complex_mode=self.complex_mode,
+            functions=self.functions,
+            call_depth=self.call_depth + 1,
+            bitwise_allowed=self.bitwise_allowed,
+            uint32=self.uint32,
+        )
+        nested.call_depth_limit = self.call_depth_limit
+        return nested
+
+
+_CALL_DEPTH_LIMIT = 4096
+
+
+def _drive(root) -> MathValue:
+    """生成器驱动器：一个循环跑完任意深度的调用链，Python 栈深度保持常数。"""
+    stack: list = [root]
+    value = None  # 生成器首次只能 send(None)
+    while stack:
         try:
-            node = ast.parse(expression, mode="eval").body
-        except SyntaxError as error:
-            raise ValueError(f"invalid condition at line {line}: {error}") from error
-        return _condition_value(node, frame, functions=functions)
+            request = stack[-1].send(value)
+        except StopIteration as stopped:
+            stack.pop()
+            value = stopped.value
+            continue
+        value = None
+        if isinstance(request, _EvalRequest):
+            stack.append(_eval_request_gen(request))
+        elif isinstance(request, _CallRequest):
+            stack.append(
+                _body_gen(
+                    request.entry,
+                    request.arguments,
+                    request.values,
+                    complex_mode=request.context.complex_mode,
+                    functions=request.context.functions,
+                    call_depth=request.context.call_depth,
+                    bitwise_allowed=request.context.bitwise_allowed,
+                    uint32=request.context.uint32,
+                )
+            )
+        else:  # pragma: no cover - 内部协议错误
+            raise SystemExit(f"unknown trampoline request {request!r}")
+    return value
 
-    def run(statements: tuple[Statement, ...]) -> None:
+
+def _eval_request_gen(request: _EvalRequest):
+    """求值一条源码表达式；先把其中的用户函数调用「提」出来交给驱动器。"""
+    try:
+        node = ast.parse(request.expression, mode="eval").body
+    except SyntaxError as error:
+        raise ValueError(
+            f"invalid expression at line {request.line}: {error}"
+        ) from error
+    rewritten, extra = yield from _hoist_user_calls(
+        node, request.frame, request.context
+    )
+    values = request.frame
+    if extra:
+        values = {**request.frame, **extra}
+    if request.condition:
+        # "auto"：单表达式函数的体需要像原实现那样，比较/布尔表达式按条件求值。
+        if request.condition is True or isinstance(
+            rewritten, (ast.Compare, ast.BoolOp)
+        ):
+            return _condition_value(
+                rewritten, values, functions=request.context.functions
+            )
+    return _eval_value_node(
+        rewritten,
+        values,
+        complex_mode=request.context.complex_mode,
+        functions=request.context.functions,
+        call_depth=request.context.call_depth,
+        bitwise_allowed=request.context.bitwise_allowed,
+        uint32=request.context.uint32,
+    )
+
+
+def _is_user_call(node: ast.expr, context: _EvalContext) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and bool(context.functions)
+        and node.func.id.lower() in context.functions
+    )
+
+
+def _hoist_user_calls(node: ast.expr, frame: dict[str, MathValue], context: _EvalContext):
+    """把用户函数调用替换成临时变量名，值由驱动器算好后放进 ``extra``。
+
+    这样「深递归」只剩下驱动器的循环；被交给 ``_eval_numeric_node`` 的表达式永远
+    不含用户调用，所以 Python 递归深度只取决于表达式本身的嵌套层数（很浅）。
+    """
+    extra: dict[str, MathValue] = {}
+    counter = [0]
+
+    def rewrite(current: ast.expr):
+        if _is_user_call(current, context):
+            entry = context.functions[current.func.id.lower()]
+            if current.keywords:
+                raise ValueError(
+                    f"{current.func.id} does not accept keyword arguments"
+                )
+            parameters = entry.parameters
+            if len(current.args) != len(parameters):
+                raise ValueError(
+                    f"{current.func.id} expects {len(parameters)} argument(s)"
+                )
+            if context.call_depth + 1 > _CALL_DEPTH_LIMIT:
+                raise ValueError("function recursion depth exceeded")
+            arguments = []
+            for argument in current.args:
+                rewritten_argument = yield from rewrite(argument)
+                values = {**frame, **extra}
+                arguments.append(
+                    _eval_value_node(
+                        rewritten_argument,
+                        values,
+                        complex_mode=context.complex_mode,
+                        functions=context.functions,
+                        call_depth=context.call_depth,
+                        bitwise_allowed=context.bitwise_allowed,
+                        uint32=context.uint32,
+                    )
+                )
+            produced = yield _CallRequest(
+                entry, arguments, {**frame, **extra}, context.deeper()
+            )
+            name = f"__v10_tmp_{counter[0]}"
+            counter[0] += 1
+            extra[name] = produced
+            return ast.Name(id=name, ctx=ast.Load())
+        children = list(ast.iter_child_nodes(current))
+        if not children:
+            return current
+        # choose 是惰性内置：只对选中的分支求值，所以必须先算条件再提调用。
+        if (
+            isinstance(current, ast.Call)
+            and isinstance(current.func, ast.Name)
+            and current.func.id.lower() == "choose"
+            and len(current.args) == 3
+            and not current.keywords
+        ):
+            condition_node = yield from rewrite(current.args[0])
+            matched = _condition_value(
+                condition_node, {**frame, **extra}, functions=context.functions
+            )
+            return (yield from rewrite(current.args[1] if matched else current.args[2]))
+        changed = False
+        for child in children:
+            if not isinstance(child, ast.expr):
+                continue
+            replacement = yield from rewrite(child)
+            if replacement is not child:
+                for field, value in ast.iter_fields(current):
+                    if value is child:
+                        setattr(current, field, replacement)
+                    elif isinstance(value, list):
+                        for index, item in enumerate(value):
+                            if item is child:
+                                value[index] = replacement
+                changed = True
+        if changed:
+            ast.fix_missing_locations(current)
+        return current
+
+    result = yield from rewrite(node)
+    return result, extra
+
+
+def _body_gen(
+    entry: UserFunction,
+    arguments: list[MathValue],
+    values: dict[str, MathValue],
+    *,
+    complex_mode: bool = False,
+    functions: dict[str, UserFunction] | None = None,
+    call_depth: int = 0,
+    bitwise_allowed: bool = False,
+    uint32: bool = False,
+):
+    """执行函数体（生成器版本）。表达式与条件都通过 ``_EvalRequest`` 交还给驱动器。"""
+    frame: dict[str, MathValue] = {}
+    for capture in entry.captures:
+        if capture not in values:
+            raise ValueError(f"captured value '{capture}' is not available in this scope")
+        frame[capture] = values[capture]
+    frame.update(zip(entry.parameters, arguments))
+    # 函数体内 `{param}` 会变成 `var_param`；同时登记两个键，让花括号写法与裸名等价。
+    for parameter in entry.parameters:
+        if parameter in frame:
+            frame[f"var_{parameter}"] = frame[parameter]
+    # 记录参数：字段按位置展开成 `param__field`，与函数体内的 `a.field` 写法对齐。
+    for parameter, fields in entry.parameter_fields:
+        bound = frame.get(parameter)
+        if not isinstance(bound, list):
+            raise ValueError(f"record parameter '{parameter}' expects a record value")
+        if len(bound) != len(fields):
+            raise ValueError(
+                f"record parameter '{parameter}' expects {len(fields)} field(s)"
+            )
+        for field, field_value in zip(fields, bound):
+            frame[f"{parameter}__{field}"] = field_value
+    nested_functions = dict(functions or {})
+    for statement in _walk_body_statements(entry.body or ()):
+        if statement.kind != "function_nested":
+            continue
+        nested_name = str(statement.data["name"]).lower()
+        nested_functions[nested_name] = UserFunction(
+            tuple(str(value) for value in statement.data["parameters"]),
+            statement.line,
+            expression=str(statement.data["expression"]),
+            captures=tuple(str(value) for value in statement.data["captures"]),
+            name=nested_name,
+        )
+    functions = nested_functions
+    context = _EvalContext(
+        complex_mode=complex_mode,
+        functions=functions,
+        call_depth=call_depth,
+        bitwise_allowed=bitwise_allowed,
+        uint32=uint32,
+    )
+    limit = entry.max_loop_iterations
+
+    if entry.body is None:
+        # 单表达式函数：表达式本身就是返回值（比较/布尔表达式按条件求值）。
+        return (yield _EvalRequest(
+            str(entry.expression), entry.line, frame, context, condition="auto"
+        ))
+
+    def run(statements: tuple[Statement, ...]):
         for statement in statements:
             kind = statement.kind
             if kind in {"function_local", "function_set"}:
-                frame[str(statement.data["name"])] = evaluate(
-                    str(statement.data["expression"]), statement.line
+                frame[str(statement.data["name"])] = yield _EvalRequest(
+                    str(statement.data["expression"]), statement.line, frame, context
                 )
             elif kind == "function_record_local":
                 base = str(statement.data["name"])
                 for field, expression in zip(
                     statement.data["record_fields"], statement.data["fields"]
                 ):
-                    frame[f"{base}__{field}"] = evaluate(str(expression), statement.line)
+                    frame[f"{base}__{field}"] = yield _EvalRequest(
+                        str(expression), statement.line, frame, context
+                    )
             elif kind in {"function_record_copy", "function_record_assign"}:
                 base = str(statement.data["name"])
                 source = str(statement.data["source"])
                 for field in statement.data["record_fields"]:
                     frame[f"{base}__{field}"] = frame[f"{source}__{field}"]
+            elif kind == "function_record_call_local":
+                base = str(statement.data["name"])
+                value = yield _EvalRequest(
+                    str(statement.data["expression"]), statement.line, frame, context
+                )
+                fields = statement.data["record_fields"]
+                if not isinstance(value, list):
+                    raise ValueError(
+                        f"function '{statement.data['record']}' did not return a record"
+                    )
+                if len(value) != len(fields):
+                    raise ValueError(
+                        f"record '{statement.data['record']}' expects {len(fields)} field(s)"
+                    )
+                for field, field_value in zip(fields, value):
+                    frame[f"{base}__{field}"] = field_value
             elif kind == "function_record_set":
                 base = str(statement.data["name"])
                 field = str(statement.data["field"])
-                frame[f"{base}__{field}"] = evaluate(
-                    str(statement.data["expression"]), statement.line
+                frame[f"{base}__{field}"] = yield _EvalRequest(
+                    str(statement.data["expression"]), statement.line, frame, context
                 )
             elif kind == "function_return":
-                raise _FunctionReturn(
-                    evaluate(str(statement.data["expression"]), statement.line)
+                value = yield _EvalRequest(
+                    str(statement.data["expression"]), statement.line, frame, context
                 )
+                raise _FunctionReturn(value)
             elif kind == "function_if":
-                if condition(str(statement.data["condition"]), statement.line):
-                    run(statement.body)
+                matched = yield _EvalRequest(
+                    str(statement.data["condition"]),
+                    statement.line,
+                    frame,
+                    context,
+                    condition=True,
+                )
+                if matched:
+                    yield from run(statement.body)
                 else:
-                    run(tuple(statement.data["else_body"]))  # type: ignore[arg-type]
+                    yield from run(tuple(statement.data["else_body"]))  # type: ignore[arg-type]
             elif kind == "function_while":
                 iterations = 0
-                while condition(str(statement.data["condition"]), statement.line):
+                while True:
+                    matched = yield _EvalRequest(
+                        str(statement.data["condition"]),
+                        statement.line,
+                        frame,
+                        context,
+                        condition=True,
+                    )
+                    if not matched:
+                        break
                     if limit is not None and iterations >= limit:
                         raise ValueError("loop iteration limit exceeded")
                     iterations += 1
                     try:
-                        run(statement.body)
+                        yield from run(statement.body)
                     except _FunctionContinue:
                         continue
                     except _FunctionBreak:
                         break
+                continue
+            elif kind == "function_print":
+                pieces: list[str] = []
+                for part in statement.data["parts"]:
+                    value = yield _EvalRequest(
+                        str(part), statement.line, frame, context
+                    )
+                    if isinstance(value, list):
+                        raise ValueError("print cannot show an array value")
+                    pieces.append(_format_numeric(value, _TEXT_PRECISION))
+                _emit_print("".join(pieces), statement.data.get("encoding"))
             elif kind == "function_break":
                 raise _FunctionBreak()
             elif kind == "function_continue":
@@ -1866,7 +2556,7 @@ def _eval_function_body(
                 raise ValueError(f"unsupported function statement '{kind}'")
 
     try:
-        run(entry.body or ())
+        yield from run(entry.body or ())
     except _FunctionReturn as returned:
         return returned.value
     return 0
@@ -1975,6 +2665,10 @@ class Interpreter:
     def run(self, program: Program) -> Result:
         self.math_mode = program.math_mode
         self.output_precision = program.output_precision
+        # to_text / text_join 的格式化精度与 #%precision 保持一致（C 后端同样处理）。
+        global _TEXT_PRECISION, _ACTIVE_EMIT
+        _TEXT_PRECISION = program.output_precision
+        _ACTIVE_EMIT = self._function_print_line
         self.memory_mode = program.memory_mode
         self.maxlen = program.maxlen
         self.on_oom = program.on_oom
@@ -2008,8 +2702,12 @@ class Interpreter:
         if kind == "var_declare":
             name = str(statement.data["name"])
             existing = context.variables.get(name)
-            if existing is not None and (
-                existing.value is not None or existing.array_value is not None
+            if (
+                existing is not None
+                and (existing.value is not None or existing.array_value is not None)
+                # 循环体里每轮都是一次新的绑定，所以允许重新初始化；
+                # 顶层/非循环块的重复声明仍然报错（保留原来的防错价值）。
+                and context.loop_depth == 0
             ):
                 raise RuntimeError(statement.line, f"variable '{name}' is already declared")
             value = self._resolve_value(statement.data["value"], context, statement.line)
@@ -2032,9 +2730,17 @@ class Interpreter:
                 is_array_expression = isinstance(body, ast.List) or (
                     isinstance(body, ast.Call)
                     and isinstance(body.func, ast.Name)
-                    and body.func.id.lower()
-                    in {"array_set", "array_push", "array_fill", "array_copy", "bytes_from_str", "matrix_mul", "matrix_transpose",
-                        "matrix2_inverse", "matrix3_inverse", "solve_linear"}
+                    and (
+                        body.func.id.lower()
+                        in {
+                            "array_set", "array_push", "array_fill", "array_copy",
+                            "bytes_from_str", "matrix_mul", "matrix_transpose",
+                            "matrix2_inverse", "matrix3_inverse", "solve_linear",
+                            "sort_array", "reverse_array", "random_bytes",
+                        }
+                        # 返回数组的用户函数
+                        or body.func.id.lower() in self.functions
+                    )
                 )
                 if not is_array_expression:
                     raise ValueError(
@@ -2218,16 +2924,26 @@ class Interpreter:
                 "pi_digits", "pi_str", "e_digits", "e_str",
                 "sqrt2_digits", "sqrt2_str",
                 "array_fill", "array_copy", "bytes_from_str", "str_from_bytes",
+                "split_count", "field", "count_text", "contains_text",
+                "starts_with", "ends_with", "repeat_text", "pad_left", "pad_right",
+                "line_at", "to_number", "random_secure", "random_bytes", "now_ms",
+                "sort_array", "reverse_array", "array_index_of",
             }:
                 raise RuntimeError(statement.line, f"function name '{name}' is reserved")
             body = statement.data.get("body")
             expression = statement.data.get("expression")
+            fields_spec = statement.data.get("parameter_fields") or {}
             self.functions[name] = UserFunction(
                 parameters,
                 statement.line,
                 expression=str(expression) if expression is not None else None,
                 body=tuple(body) if isinstance(body, tuple) else None,
                 max_loop_iterations=self.max_loop_iterations,
+                parameter_fields=tuple(
+                    (str(parameter), tuple(str(field) for field in fields))
+                    for parameter, fields in fields_spec.items()
+                ),
+                name=name,
             )
             self.last = Result("ok", name)
             return
@@ -2245,28 +2961,32 @@ class Interpreter:
             return
         if kind == "while":
             iterations = 0
-            while _evaluate_condition(str(statement.data["condition"]), context, statement.line, self.functions):
-                if self.max_loop_iterations is not None and iterations >= self.max_loop_iterations:
-                    raise RuntimeError(statement.line, "loop iteration limit exceeded")
-                self._execute_sequence(statement.body, context, block_mode)
-                if self.pending_jump_line is not None:
-                    break
-                iterations += 1
-                if self.last.status == "stop":
-                    break
+            context.loop_depth += 1
+            try:
+                while _evaluate_condition(str(statement.data["condition"]), context, statement.line, self.functions):
+                    if self.max_loop_iterations is not None and iterations >= self.max_loop_iterations:
+                        raise RuntimeError(statement.line, "loop iteration limit exceeded")
+                    self._execute_sequence(statement.body, context, block_mode)
+                    if self.pending_jump_line is not None:
+                        break
+                    iterations += 1
+                    if self.last.status == "stop":
+                        break
+            finally:
+                context.loop_depth -= 1
             if self.last.status != "stop":
                 self.last = Result("ok")
             return
         if kind == "require_ok":
             # HOP 的「失败即停」守卫：前一步置为 (error) 时立刻终止并带步骤号。
             step = int(statement.data.get("step") or 0)
-            label = f"HOP 第 {step} 步失败" if step else "上一步失败"
+            label = f"HOP step {step} failed" if step else "previous step failed"
             if self.last.status == "error":
                 detail = str(self.last.value or "").strip()
                 raise RuntimeError(
                     statement.line,
-                    f"{label}: 前一步状态为 error"
-                    + (f"（{detail}）" if detail and detail != "error" else ""),
+                    f"{label}: previous step reported error"
+                    + (f" ({detail})" if detail and detail != "error" else ""),
                 )
             self.last = Result("ok", self.last.value)
             return
@@ -2787,6 +3507,23 @@ class Interpreter:
         else:
             print(value, file=self.output)
         self.last = Result("ok", value)
+
+    def _function_print_line(self, text: str, encoding: str | None = None) -> None:
+        """函数体内 print 的输出出口（与顶层 print 的编码处理保持一致）。"""
+        if encoding:
+            try:
+                encoded_value = text.encode(str(encoding))
+            except (LookupError, UnicodeEncodeError) as error:
+                raise RuntimeError(0, f"cannot print using {encoding}: {error}") from error
+            buffer = getattr(self.output, "buffer", None)
+            if buffer is not None:
+                buffer.write(encoded_value + b"\n")
+                buffer.flush()
+            else:
+                print(text, file=self.output)
+        else:
+            print(text, file=self.output)
+        self.last = Result("ok", text)
 
     def _ask(self, statement: Statement, context: Context) -> None:
         name = str(statement.data["name"])

@@ -1,0 +1,13 @@
+[package]
+name = "datakit"
+version = "1.0.0"
+entry = "lib.cos"
+
+[plugin]
+type = "library"
+
+[plugin.exposes]
+csv_row_count = "csv_row_count"
+csv_col_count = "csv_col_count"
+csv_data_row_count = "csv_data_row_count"
+csv_row_width = "csv_row_width"

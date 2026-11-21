@@ -100,6 +100,11 @@ _BUILTIN_FUNCTION_NAMES = {
     "median", "variance", "correlation", "percentile", "trapz", "simpson",
     "pi_digits", "pi_str", "e_digits", "e_str", "sqrt2_digits", "sqrt2_str",
     "array_fill", "array_copy", "bytes_from_str", "str_from_bytes",
+    "split_count", "field", "count_text", "contains_text", "starts_with",
+    "ends_with", "repeat_text", "pad_left", "pad_right", "line_at", "to_number",
+    "random_secure", "random_bytes", "now_ms",
+    "sort_array", "reverse_array", "array_index_of",
+    "text_concat", "to_text", "text_join",
 }
 
 
@@ -116,6 +121,7 @@ _C_RUNTIME = r'''
 #include <stdatomic.h>
 #ifdef _WIN32
 #include <windows.h>
+#include <bcrypt.h>
 #include <process.h>
 #define popen _popen
 #define pclose _pclose
@@ -125,6 +131,9 @@ _C_RUNTIME = r'''
 #include <strings.h>
 #include <termios.h>
 #include <dlfcn.h>
+#if defined(__linux__)
+#include <sys/random.h>
+#endif
 #define _stricmp strcasecmp
 #define sleep_ms(ms) usleep((useconds_t)(ms) * 1000)
 #endif
@@ -155,7 +164,18 @@ typedef struct {
     size_t matrix_columns;
 } ArrayVariable;
 typedef struct { Variable vars[VAR_COUNT]; ArrayVariable arrays[ARRAY_COUNT]; } Context;
-typedef struct { int status; char *value; } Result;
+/* Result 是 tagged union：kind 决定 union 里哪个成员有效。
+   TEXT 走 as.text（malloc 的字符串），ARRAY 走 as.array（malloc 的数值数组）。
+   两种所有权都归 Result 持有者，用 release_result() 或 set_result() 释放。 */
+enum { RESULT_NONE = 0, RESULT_TEXT = 1, RESULT_ARRAY = 2 };
+typedef struct {
+    int status;
+    int kind;
+    union {
+        char *text;
+        struct { double *data; size_t length; } array;
+    } as;
+} Result;
 typedef struct TapeCell { int symbol; struct TapeCell *left; struct TapeCell *right; } TapeCell;
 typedef struct { TapeCell *current; int initialized; } Tape;
 typedef struct ArrayAllocation {
@@ -294,15 +314,47 @@ static unsigned char *copy_bytes(const unsigned char *bytes) {
     return copy;
 }
 
+static void release_result(Result *result) {
+    if (result->kind == RESULT_TEXT) free(result->as.text);
+    else if (result->kind == RESULT_ARRAY) free(result->as.array.data);
+    result->kind = RESULT_NONE;
+    result->as.text = NULL;
+}
+
 static void set_result(Result *result, int status, const char *value) {
     char *copy = copy_text(value);
-    free(result->value);
+    release_result(result);
     result->status = status;
-    result->value = copy;
+    if (copy) {
+        result->kind = RESULT_TEXT;
+        result->as.text = copy;
+    }
+}
+
+/* 设置数值数组结果；数组内容按值拷贝。 */
+static void set_array_result(Result *result, const double *data, size_t length, int status) {
+    release_result(result);
+    result->status = status;
+    if (!length) {
+        result->kind = RESULT_ARRAY;
+        result->as.array.data = NULL;
+        result->as.array.length = 0;
+        return;
+    }
+    double *copy = (double *)malloc(length * sizeof(double));
+    if (!copy) fail_at(0, "out of memory");
+    memcpy(copy, data, length * sizeof(double));
+    result->kind = RESULT_ARRAY;
+    result->as.array.data = copy;
+    result->as.array.length = length;
 }
 
 static void copy_result(Result *destination, const Result *source) {
-    set_result(destination, source->status, source->value);
+    if (source->kind == RESULT_ARRAY) {
+        set_array_result(destination, source->as.array.data, source->as.array.length, source->status);
+        return;
+    }
+    set_result(destination, source->status, source->as.text);
 }
 
 static int variable_matches(Context *context, int index, const char *expected, int line) {
@@ -553,6 +605,25 @@ static double vector_at(const double *values, size_t count, double index, int li
 static CosmicArray cosmic_array(const double *values, size_t count) {
     CosmicArray result = { values, count };
     return result;
+}
+
+/* 值会离开当前语句（返回值、记录字段）时必须复制到受管内存。 */
+static double *cosmic_allocate_array(size_t count, int line);
+static double complex *cosmic_allocate_complex_array(size_t count, int line);
+static CosmicComplexArray cosmic_complex_array(const double complex *values, size_t count);
+
+static CosmicArray cosmic_array_owned(const double *values, size_t count, int line) {
+    double *data = cosmic_allocate_array(count, line);
+    if (count) memcpy(data, values, count * sizeof(double));
+    return cosmic_array(data, count);
+}
+
+static CosmicComplexArray cosmic_complex_array_owned(
+    const double complex *values, size_t count, int line
+) {
+    double complex *data = cosmic_allocate_complex_array(count, line);
+    if (count) memcpy(data, values, count * sizeof(double complex));
+    return cosmic_complex_array(data, count);
 }
 
 static CosmicComplexArray cosmic_complex_array(const double complex *values, size_t count) {
@@ -1286,6 +1357,27 @@ static int cosmic_compare_double(const void *left, const void *right) {
     if (a < b) return -1;
     if (a > b) return 1;
     return 0;
+}
+
+static CosmicArray cosmic_array_sort(CosmicArray array, int line) {
+    double *data = cosmic_allocate_array(array.length, line);
+    if (array.length) memcpy(data, array.data, array.length * sizeof(double));
+    qsort(data, array.length, sizeof(double), cosmic_compare_double);
+    return cosmic_array(data, array.length);
+}
+
+static CosmicArray cosmic_array_reverse(CosmicArray array, int line) {
+    double *data = cosmic_allocate_array(array.length, line);
+    for (size_t i = 0; i < array.length; ++i) data[i] = array.data[array.length - 1 - i];
+    return cosmic_array(data, array.length);
+}
+
+static double cosmic_array_index_of(CosmicArray array, double value, int line) {
+    (void)line;
+    for (size_t i = 0; i < array.length; ++i) {
+        if (array.data[i] == value) return (double)i;
+    }
+    return -1.0;
 }
 
 static double cosmic_array_median(CosmicArray array, int line) {
@@ -2612,6 +2704,64 @@ static char *cosmic_trim_owned(char *text) {
     return result;
 }
 
+/* v10 B5：文本拼接。接管两个实参的所有权，返回新的堆字符串。 */
+static char *cosmic_text_concat_owned(char *left, char *right, int line) {
+    size_t left_length = left ? strlen(left) : 0;
+    size_t right_length = right ? strlen(right) : 0;
+    if (left_length + right_length > 16u * 1024u * 1024u)
+        fail_at(line, "text_concat result exceeds the 16 MiB limit");
+    char *result = (char *)malloc(left_length + right_length + 1);
+    if (!result) fail_at(line, "out of memory");
+    if (left_length) memcpy(result, left, left_length);
+    if (right_length) memcpy(result + left_length, right, right_length);
+    result[left_length + right_length] = '\0';
+    free(left);
+    free(right);
+    return result;
+}
+
+/* v10 B5：数值 -> 文本，格式与 print/math_run 一致（#%precision 位有效数字）。 */
+static char *cosmic_number_to_text_owned(double value, int line) {
+    char buffer[64];
+    snprintf(buffer, sizeof(buffer), "%.*g", COSMIC_TEXT_PRECISION, value);
+    size_t length = strlen(buffer);
+    char *result = (char *)malloc(length + 1);
+    if (!result) fail_at(line, "out of memory");
+    memcpy(result, buffer, length + 1);
+    return result;
+}
+
+/* v10 B5：数值数组按分隔符拼成文本。 */
+static char *cosmic_join_array_owned(CosmicArray array, char *separator, int line) {
+    const char *sep = separator ? separator : "";
+    size_t sep_length = strlen(sep);
+    size_t total = 1;
+    for (size_t index = 0; index < array.length; ++index) {
+        char item[64];
+        snprintf(item, sizeof(item), "%.*g", COSMIC_TEXT_PRECISION, array.data[index]);
+        total += strlen(item) + (index + 1 < array.length ? sep_length : 0);
+        if (total > 16u * 1024u * 1024u)
+            fail_at(line, "text_join result exceeds the 16 MiB limit");
+    }
+    char *result = (char *)malloc(total);
+    if (!result) fail_at(line, "out of memory");
+    size_t offset = 0;
+    for (size_t index = 0; index < array.length; ++index) {
+        char item[64];
+        snprintf(item, sizeof(item), "%.*g", COSMIC_TEXT_PRECISION, array.data[index]);
+        size_t length = strlen(item);
+        memcpy(result + offset, item, length);
+        offset += length;
+        if (index + 1 < array.length && sep_length) {
+            memcpy(result + offset, sep, sep_length);
+            offset += sep_length;
+        }
+    }
+    result[offset] = '\0';
+    free(separator);
+    return result;
+}
+
 /* 行数 = 换行符个数 + (非空且不以换行结尾时补一行)；空文本为 0。 */
 static double cosmic_line_count_owned(char *text) {
     if (!text) return 0.0;
@@ -2627,6 +2777,261 @@ static double cosmic_line_count_owned(char *text) {
     if (text[bytes - 1] != '\n') lines += 1.0;
     free(text);
     return lines;
+}
+
+static double cosmic_split_count_owned(char *text, char *separator, int line) {
+    size_t separator_length = strlen(separator);
+    if (!separator_length) fail_at(line, "split_count separator must not be empty");
+    double count = 1.0;
+    for (char *cursor = text; (cursor = strstr(cursor, separator)) != NULL; cursor += separator_length)
+        count += 1.0;
+    free(text);
+    free(separator);
+    return count;
+}
+
+static char *cosmic_field_owned(char *text, char *separator, double index, int line) {
+    size_t separator_length = strlen(separator);
+    if (!separator_length) fail_at(line, "field separator must not be empty");
+    if (!isfinite(index) || index != trunc(index) || index < 1)
+        fail_at(line, "field index must be a positive integer");
+    size_t wanted = (size_t)index, current = 1;
+    char *cursor = text;
+    char *result = NULL;
+    while (1) {
+        char *found = strstr(cursor, separator);
+        if (current == wanted) {
+            size_t length = found ? (size_t)(found - cursor) : strlen(cursor);
+            result = (char *)malloc(length + 1);
+            if (!result) fail_at(line, "out of memory");
+            memcpy(result, cursor, length);
+            result[length] = '\0';
+            break;
+        }
+        if (!found) fail_at(line, "field index is outside the text");
+        cursor = found + separator_length;
+        ++current;
+    }
+    free(text);
+    free(separator);
+    return result;
+}
+
+static double cosmic_count_text_owned(char *text, char *needle, int line) {
+    size_t needle_length = strlen(needle);
+    if (!needle_length) fail_at(line, "count_text needle must not be empty");
+    double count = 0.0;
+    for (char *cursor = text; (cursor = strstr(cursor, needle)) != NULL; cursor += needle_length)
+        count += 1.0;
+    free(text);
+    free(needle);
+    return count;
+}
+
+static double cosmic_contains_text_owned(char *text, char *needle) {
+    double result = needle[0] == '\0' || strstr(text, needle) != NULL ? 1.0 : 0.0;
+    free(text);
+    free(needle);
+    return result;
+}
+
+static double cosmic_starts_with_owned(char *text, char *prefix) {
+    double result = strncmp(text, prefix, strlen(prefix)) == 0 ? 1.0 : 0.0;
+    free(text);
+    free(prefix);
+    return result;
+}
+
+static double cosmic_ends_with_owned(char *text, char *suffix) {
+    size_t text_length = strlen(text), suffix_length = strlen(suffix);
+    double result = suffix_length <= text_length &&
+                    memcmp(text + text_length - suffix_length, suffix, suffix_length) == 0 ? 1.0 : 0.0;
+    free(text);
+    free(suffix);
+    return result;
+}
+
+static char *cosmic_repeat_text_owned(char *text, double count_value, int line) {
+    if (!isfinite(count_value) || count_value != trunc(count_value) || count_value < 0)
+        fail_at(line, "repeat_text count must be a non-negative integer");
+    size_t count = (size_t)count_value, length = strlen(text);
+    if (count && length > (size_t)(16 * 1024 * 1024) / count)
+        fail_at(line, "repeat_text result exceeds the 16 MiB limit");
+    size_t total = length * count;
+    char *result = (char *)malloc(total + 1);
+    if (!result) fail_at(line, "out of memory");
+    for (size_t i = 0; i < count; ++i) memcpy(result + i * length, text, length);
+    result[total] = '\0';
+    free(text);
+    return result;
+}
+
+/* 按码点宽度补齐；pad 必须是单个 UTF-8 码点。 */
+static char *cosmic_pad_owned(char *text, double width_value, char *pad, int pad_left, int line) {
+    if (!isfinite(width_value) || width_value != trunc(width_value) || width_value < 0)
+        fail_at(line, "pad width must be a non-negative integer");
+    size_t pad_length = strlen(pad), width = (size_t)width_value, unit = 1;
+    unsigned char first = (unsigned char)pad[0];
+    if ((first & 0xe0) == 0xc0) unit = 2;
+    else if ((first & 0xf0) == 0xe0) unit = 3;
+    else if ((first & 0xf8) == 0xf0) unit = 4;
+    if (pad_length != unit || !valid_utf8((const unsigned char *)pad, pad_length))
+        fail_at(line, "pad padding must be a single character");
+    size_t text_length = strlen(text), characters = unicode_strlen(text);
+    if (characters >= width) {
+        free(pad);
+        return text;
+    }
+    size_t missing = width - characters;
+    size_t total = text_length + missing * pad_length;
+    char *result = (char *)malloc(total + 1);
+    if (!result) fail_at(line, "out of memory");
+    if (pad_left) {
+        char *cursor = result;
+        for (size_t i = 0; i < missing; ++i) {
+            memcpy(cursor, pad, pad_length);
+            cursor += pad_length;
+        }
+        memcpy(cursor, text, text_length);
+    } else {
+        memcpy(result, text, text_length);
+        for (size_t i = 0; i < missing; ++i)
+            memcpy(result + text_length + i * pad_length, pad, pad_length);
+    }
+    result[total] = '\0';
+    free(text);
+    free(pad);
+    return result;
+}
+
+static char *cosmic_line_at_owned(char *text, double index_value, int line) {
+    if (!isfinite(index_value) || index_value != trunc(index_value) || index_value < 1)
+        fail_at(line, "line_at index must be a positive integer");
+    if (!text[0]) fail_at(line, "line_at index is outside the text");
+    size_t wanted = (size_t)index_value, current = 1;
+    char *cursor = text;
+    while (current < wanted) {
+        char *newline = strchr(cursor, '\n');
+        if (!newline) fail_at(line, "line_at index is outside the text");
+        cursor = newline + 1;
+        ++current;
+    }
+    char *newline = strchr(cursor, '\n');
+    if (!newline && !cursor[0]) fail_at(line, "line_at index is outside the text");
+    size_t length = newline ? (size_t)(newline - cursor) : strlen(cursor);
+    if (length && cursor[length - 1] == '\r') --length;
+    char *result = (char *)malloc(length + 1);
+    if (!result) fail_at(line, "out of memory");
+    memcpy(result, cursor, length);
+    result[length] = '\0';
+    free(text);
+    return result;
+}
+
+static double cosmic_to_number_owned(char *text, int line) {
+    const char *start = text, *end = text + strlen(text);
+    while (start < end && (*start == ' ' || *start == '\t' || *start == '\r' || *start == '\n')) ++start;
+    while (end > start && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r' || end[-1] == '\n')) --end;
+    const char *cursor = start;
+    if (cursor < end && (*cursor == '+' || *cursor == '-')) ++cursor;
+    int digits = 0, dots = 0;
+    while (cursor < end) {
+        if (*cursor >= '0' && *cursor <= '9') {
+            ++digits;
+            ++cursor;
+        } else if (*cursor == '.' && !dots) {
+            ++dots;
+            ++cursor;
+        } else {
+            fail_at(line, "to_number requires an integer or decimal number");
+        }
+    }
+    if (!digits) fail_at(line, "to_number requires an integer or decimal number");
+    size_t length = (size_t)(end - start);
+    char *buffer = (char *)malloc(length + 1);
+    if (!buffer) fail_at(line, "out of memory");
+    memcpy(buffer, start, length);
+    buffer[length] = '\0';
+    double value = strtod(buffer, NULL);
+    free(buffer);
+    free(text);
+    return value;
+}
+
+/* CSPRNG：Windows 用 BCryptGenRandom（需 -lbcrypt），Linux 用 getrandom 并回退 /dev/urandom。 */
+static int cosmic_random_fill(unsigned char *buffer, size_t length) {
+#if defined(_WIN32)
+    return BCryptGenRandom(NULL, buffer, (ULONG)length, BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0;
+#elif defined(__linux__)
+    size_t offset = 0;
+    while (offset < length) {
+        ssize_t got = getrandom(buffer + offset, length - offset, 0);
+        if (got <= 0) break;
+        offset += (size_t)got;
+    }
+    if (offset == length) return 1;
+    FILE *source = fopen("/dev/urandom", "rb");
+    if (!source) return 0;
+    size_t read_count = fread(buffer, 1, length, source);
+    fclose(source);
+    return read_count == length;
+#else
+    FILE *source = fopen("/dev/urandom", "rb");
+    if (!source) return 0;
+    size_t read_count = fread(buffer, 1, length, source);
+    fclose(source);
+    return read_count == length;
+#endif
+}
+
+static int cosmic_random_u64(uint64_t *result) {
+    unsigned char buffer[8];
+    if (!cosmic_random_fill(buffer, sizeof(buffer))) return 0;
+    uint64_t value = 0;
+    for (size_t i = 0; i < 8; ++i) value = (value << 8) | buffer[i];
+    *result = value;
+    return 1;
+}
+
+static double cosmic_random_secure(double low, double high, int line) {
+    if (!isfinite(low) || !isfinite(high) || low != trunc(low) || high != trunc(high))
+        fail_at(line, "random_secure bounds must be integers");
+    if (low > high) fail_at(line, "random_secure requires low <= high");
+    if (fabs(low) >= 9007199254740992.0 || fabs(high) >= 9007199254740992.0)
+        fail_at(line, "random_secure bounds must be below 2^53 in magnitude");
+    uint64_t span = (uint64_t)(high - low) + 1;
+    uint64_t limit = UINT64_MAX - (UINT64_MAX % span), value = 0;
+    do {
+        if (!cosmic_random_u64(&value)) fail_at(line, "random source is unavailable");
+    } while (value >= limit);
+    return (double)((int64_t)low + (int64_t)(value % span));
+}
+
+static CosmicArray cosmic_random_bytes(double count_value, int line) {
+    if (!isfinite(count_value) || count_value != trunc(count_value) ||
+        count_value < 0 || count_value > 1000000)
+        fail_at(line, "random_bytes length must be between 0 and 1000000");
+    size_t length = (size_t)count_value;
+    double *data = cosmic_allocate_array(length, line);
+    for (size_t i = 0; i < length; ++i) {
+        unsigned char byte = 0;
+        if (!cosmic_random_fill(&byte, 1)) fail_at(line, "random source is unavailable");
+        data[i] = (double)byte;
+    }
+    return cosmic_array(data, length);
+}
+
+static double cosmic_now_ms(void) {
+#if defined(_WIN32)
+    FILETIME file_time;
+    GetSystemTimeAsFileTime(&file_time);
+    uint64_t ticks = ((uint64_t)file_time.dwHighDateTime << 32) | (uint64_t)file_time.dwLowDateTime;
+    return (double)((ticks - 116444736000000000ULL) / 10000ULL);
+#else
+    struct timespec now;
+    clock_gettime(CLOCK_REALTIME, &now);
+    return (double)now.tv_sec * 1000.0 + (double)(now.tv_nsec / 1000000L);
+#endif
 }
 
 static char *cosmic_replace_owned(char *text, char *source, char *replacement, int line) {
@@ -3222,6 +3627,265 @@ def _identifier(name: str) -> str:
     return "var_" + re.sub(r"\W", "_", name)
 
 
+_STRING_RESULT_BUILTINS = frozenset({
+    "chr", "char_at", "read_text", "hex", "pi_str", "e_str", "sqrt2_str",
+    "substr_bytes", "trim", "upper", "lower", "replace",
+    "str_from_bytes", "field", "repeat_text", "pad_left", "pad_right",
+    "line_at", "text_concat", "to_text", "text_join",
+})
+
+# 这些内置的全部实参都按文本处理；其余只有第一个实参是文本。
+_TAKE_ALL_ARGUMENTS_FUNCTIONS = frozenset({"write_text", "replace"})
+
+# 进入文本位置的参数名需要按 text 推断：返回文本的内置 + 接受文本的内置。
+# 这些内置的第 N 个实参位置是「数组」：出现在这些位置的参数按数组类型推断。
+_ARRAY_ARGUMENT_POSITIONS: dict[str, tuple[int, ...]] = {
+    "array_len": (0,),
+    "array_sum": (0,),
+    "array_at": (0,),
+    "array_index_of": (0,),
+    "array_copy": (0,),
+    "array_set": (0,),
+    "array_push": (0,),
+    "sort_array": (0,),
+    "reverse_array": (0,),
+    "bytes_to_str": (0,),
+    "mean": (0,),
+    "std": (0,),
+    "median": (0,),
+    "variance": (0,),
+    "percentile": (0,),
+    "trapz": (0, 1),
+    "simpson": (0, 1),
+    "dot": (0, 1),
+    "correlation": (0, 1),
+    "matrix_mul": (0, 1),
+    "matrix_transpose": (0,),
+    "matrix2_inverse": (0,),
+    "matrix3_inverse": (0,),
+    "solve_linear": (0, 1),
+    "text_join": (0,),
+}
+
+# 这些内置返回数组：函数体整体是它们时，函数按「返回数组」推断。
+_ARRAY_RESULT_BUILTINS = frozenset({
+    "array_fill", "array_copy", "array_set", "array_push", "sort_array",
+    "reverse_array", "bytes_from_str", "random_bytes", "matrix_mul",
+    "matrix_transpose", "matrix2_inverse", "matrix3_inverse", "solve_linear",
+})
+
+# to_text 的实参是数值，不能算「文本实参」（否则未标注参数会被误认为 text）。
+_TEXT_ARGUMENT_BUILTINS = (_STRING_RESULT_BUILTINS - {"to_text"}) | frozenset({
+    "strlen", "find", "line_count", "split_count", "count_text",
+    "contains_text", "starts_with", "ends_with", "to_number", "write_text",
+    "text_concat", "text_join",
+})
+
+# 这些内置的文本实参不在第 0 位（默认只看第一个实参）。
+_TEXT_ARGUMENT_POSITIONS: dict[str, tuple[int, ...]] = {
+    "text_concat": (0, 1),
+    "text_join": (1,),
+}
+
+
+def _record_literal_type(name: str):
+    """``__record_Point__`` -> ``Point``；不是记录字面量则 None。"""
+    if name.startswith("__record_") and name.endswith("__"):
+        return name[len("__record_") : -len("__")]
+    return None
+
+
+# 记录名 -> ((字段, 类型), ...)；由 CGenerator.generate 在生成前设置。
+_RECORD_SCHEMA: dict[str, tuple[tuple[str, str], ...]] = {}
+
+# 记录局部量名 -> 记录名；生成函数体时设置，供实参渲染查类型。
+_ACTIVE_LOCAL_RECORDS: dict[str, str] = {}
+
+
+def _render_record_argument(
+    argument: ast.expr,
+    record_type: str,
+    convert,
+    local_names: dict[str, str] | None,
+    record_fields: dict[str, str],
+) -> str:
+    """把「已经是记录」的实参变成 struct：记录局部量要按字段拼字面量。"""
+    if isinstance(argument, ast.Name) and local_names:
+        name = argument.id
+        fields = record_fields.get(_strip_var_prefix(name))
+        if fields and all(f"{name}__{field}" in local_names for field in fields):
+            members = ", ".join(local_names[f"{name}__{field}"] for field in fields)
+            return f"((CosmicRec_{record_type}){{{members}}})"
+    return convert(argument)
+
+
+def _record_local_field_is_text(base: str, field: str) -> bool:
+    """记录局部量的某个字段是不是文本（决定用 char * 还是 double）。"""
+    record_type = _ACTIVE_LOCAL_RECORDS.get(base)
+    if record_type is None:
+        return False
+    for name, _kind in _RECORD_SCHEMA.get(record_type, ()):
+        if name == field:
+            return _kind == "text"
+    return False
+
+
+def _strip_var_prefix(name: str) -> str:
+    return name[4:] if name.startswith("var_") else name
+
+
+def _render_record_literal(
+    record_type: str,
+    node: ast.Call,
+    line: int,
+    convert,
+    context: str,
+    variable_indices: dict[str, int],
+    local_names: dict[str, str] | None,
+    user_text_functions,
+) -> str:
+    """记录值 -> C struct 字面量；文本字段复制成堆字符串（接收方拥有）。"""
+    # 调用点解析出的函数名一律小写，这里按大小写不敏感找回规范记录名。
+    canonical = next(
+        (name for name in _RECORD_SCHEMA if name.lower() == record_type.lower()), None
+    )
+    if canonical is None:
+        raise ValueError(f"unknown record '{record_type}'")
+    schema = _RECORD_SCHEMA[canonical]
+    record_type = canonical
+    if node.keywords or len(node.args) != len(schema):
+        raise ValueError(
+            f"record '{record_type}' expects {len(schema)} value(s), got {len(node.args)}"
+        )
+    rendered: list[str] = []
+    for (field, kind), argument in zip(schema, node.args):
+        if kind == "text":
+            rendered.append(
+                f"copy_text("
+                f"{_render_text_argument(argument, record_type, context, line, variable_indices, local_names, convert, user_text_functions)}"
+                f")"
+            )
+        else:
+            rendered.append(f"(double)({convert(argument)})")
+    return f"((CosmicRec_{record_type}){{{', '.join(rendered)}}})"
+
+
+def _render_text_builder(
+    function_name: str,
+    node: ast.Call,
+    line: int,
+    convert,
+    convert_array,
+    local_names: dict[str, str] | None,
+    variable_indices: dict[str, int],
+    context: str,
+    user_text_functions,
+) -> str:
+    """v10 B5：``text_concat`` / ``to_text`` / ``text_join`` 的 C 渲染。"""
+    arities = {"text_concat": 2, "to_text": 1, "text_join": 2}
+    if node.keywords or len(node.args) != arities[function_name]:
+        raise ValueError(f"{function_name} expects {arities[function_name]} argument(s)")
+
+    def text_argument(argument: ast.expr) -> str:
+        return _render_text_argument(
+            argument,
+            function_name,
+            context,
+            line,
+            variable_indices,
+            local_names,
+            convert,
+            user_text_functions,
+        )
+
+    if function_name == "to_text":
+        return f"cosmic_number_to_text_owned((double)({convert(node.args[0])}), {line})"
+    if function_name == "text_concat":
+        return (
+            f"cosmic_text_concat_owned({text_argument(node.args[0])}, "
+            f"{text_argument(node.args[1])}, {line})"
+        )
+    return (
+        f"cosmic_join_array_owned({convert_array(node.args[0])}, "
+        f"{text_argument(node.args[1])}, {line})"
+    )
+
+
+def _render_text_argument(
+    argument: ast.expr,
+    function_name: str,
+    context: str,
+    line: int,
+    variable_indices: dict[str, int],
+    local_names: dict[str, str] | None,
+    convert,
+    user_text_functions: "set[str] | None" = None,
+) -> str:
+    """把「文本位置的实参」渲染成 C 侧的 char *。"""
+    if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
+        return f"copy_text({_c_string(argument.value)})"
+    if isinstance(argument, ast.Name) and argument.id.startswith("var_"):
+        name = argument.id[4:]
+        # 形参/局部量优先于同名上下文变量（函数内形参遮蔽全局）。
+        if local_names and argument.id in local_names:
+            return f"copy_text({local_names[argument.id]})"
+        if name in variable_indices:
+            return f"get_variable({context}, {variable_indices[name]}, {line})"
+        raise ValueError(f"unknown variable '{name}'")
+    if isinstance(argument, ast.Name) and local_names and argument.id in local_names:
+        return f"copy_text({local_names[argument.id]})"
+    if isinstance(argument, ast.Call) and isinstance(argument.func, ast.Name):
+        callee = argument.func.id.lower()
+        # 返回文本的用户函数调用同样可以出现在文本位置。
+        if callee in _STRING_RESULT_BUILTINS or callee in (user_text_functions or set()):
+            return convert(argument)
+    raise ValueError(
+        f"{function_name} text arguments must be a string literal, a variable, "
+        "a text parameter, or a text-returning builtin call"
+    )
+
+
+def _user_text_call_target(
+    expression: str,
+    functions: dict[str, "Statement"],
+    returns_text: "Callable[[str], bool] | None" = None,
+) -> str | None:
+    """若表达式是「返回文本的用户函数」调用，返回该函数名，否则 None。"""
+    transformed, _variables = transform_braced_expression(expression)
+    try:
+        body = ast.parse(transformed.strip(), mode="eval").body
+    except SyntaxError:
+        return None
+    if not (isinstance(body, ast.Call) and isinstance(body.func, ast.Name)):
+        return None
+    name = body.func.id.lower()
+    if name not in functions:
+        return None
+    if returns_text is not None:
+        return name if returns_text(name) else None
+    declared = str(functions[name].data.get("return_type") or "").lower()
+    return name if declared in {"text", "string", "str"} else None
+
+
+def _is_bare_name(expression: str) -> str | None:
+    """表达式是不是一个裸标识符；是则返回名字。"""
+    try:
+        body = ast.parse(transform_braced_expression(expression)[0].strip(), mode="eval").body
+    except (SyntaxError, ValueError):
+        return None
+    return body.id if isinstance(body, ast.Name) else None
+
+
+def _is_plain_string_literal(expression: str) -> bool:
+    """表达式是否就是一个字符串字面量（静态内存，需要复制才能当作文本值）。"""
+    transformed, _variables = transform_braced_expression(expression)
+    try:
+        body = ast.parse(transformed.strip(), mode="eval").body
+    except SyntaxError:
+        return False
+    return isinstance(body, ast.Constant) and isinstance(body.value, str)
+
+
 def _is_string_expression(expression: str) -> bool:
     transformed, _variables = transform_braced_expression(expression)
     transformed = re.sub(r"tape\s*\(\s*([A-Za-z_]\w*)\s*\)", r"tape_\1", transformed, flags=re.I)
@@ -3229,14 +3893,12 @@ def _is_string_expression(expression: str) -> bool:
         tree = ast.parse(transformed.strip(), mode="eval")
     except SyntaxError:
         return False
+    if isinstance(tree.body, ast.Constant) and isinstance(tree.body.value, str):
+        return True
     return (
         isinstance(tree.body, ast.Call)
         and isinstance(tree.body.func, ast.Name)
-        and tree.body.func.id.lower() in {
-            "chr", "char_at", "read_text", "hex", "pi_str", "e_str", "sqrt2_str",
-            "substr_bytes", "trim", "upper", "lower", "replace",
-            "str_from_bytes",
-        }
+        and tree.body.func.id.lower() in _STRING_RESULT_BUILTINS
     )
 
 
@@ -3252,7 +3914,7 @@ def _is_array_value_expression(expression: str, array_names: set[str]) -> bool:
         return body.id in array_names
     if isinstance(body, ast.Call) and isinstance(body.func, ast.Name):
         function_name = body.func.id.lower()
-        if function_name in {"array_set", "array_push", "array_fill", "array_copy", "bytes_from_str"}:
+        if function_name in {"array_set", "array_push", "array_fill", "array_copy", "bytes_from_str", "sort_array", "reverse_array", "random_bytes"}:
             return True
         if function_name == "choose" and len(body.args) == 3:
             return any(
@@ -3269,7 +3931,7 @@ def _is_array_ast_node(node: ast.expr, array_names: set[str]) -> bool:
         return node.id in array_names
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
         function_name = node.func.id.lower()
-        if function_name in {"array_set", "array_push", "array_fill", "array_copy", "bytes_from_str"}:
+        if function_name in {"array_set", "array_push", "array_fill", "array_copy", "bytes_from_str", "sort_array", "reverse_array", "random_bytes"}:
             return True
         if function_name == "choose" and len(node.args) == 3:
             return any(
@@ -3378,6 +4040,17 @@ def _function_expressions(statement: Statement) -> list[str]:
     return expressions
 
 
+def _function_return_expressions(statement: Statement) -> list[str]:
+    body = statement.data.get("body")
+    if body is None:
+        return [str(statement.data["expression"])]
+    return [
+        str(child.data["expression"])
+        for child in _walk_function_body(tuple(body))
+        if child.kind == "function_return"
+    ]
+
+
 def _function_locals(statements: tuple[Statement, ...]) -> list[str]:
     names: list[str] = []
     for statement in _walk_function_body(statements):
@@ -3394,7 +4067,11 @@ def _function_record_fields(
     fields: list[tuple[str, str]] = []
     seen: set[str] = set()
     for statement in _walk_function_body(statements):
-        if statement.kind not in {"function_record_local", "function_record_copy"}:
+        if statement.kind not in {
+            "function_record_local",
+            "function_record_copy",
+            "function_record_call_local",
+        }:
             continue
         base = str(statement.data["name"])
         if base in seen:
@@ -3423,6 +4100,7 @@ def _c_expression(
     bigint_mode: bool = False,
     complex_mode: bool = False,
     user_functions: dict[str, int] | None = None,
+    user_parameter_types: dict[str, dict[int, str]] | None = None,
     parameters: set[str] | None = None,
     local_names: dict[str, str] | None = None,
     call_targets: dict[str, str] | None = None,
@@ -3433,10 +4111,14 @@ def _c_expression(
     bigint_function_suffix: str = "",
     uint32_mode: bool = False,
     matrix_result: bool = False,
+    user_text_functions: "set[str] | None" = None,
+    user_array_functions: "set[str] | None" = None,
 ) -> str:
     array_indices = array_indices or {}
     array_variable_indices = array_variable_indices or {}
     array_names = set(array_indices) | set(array_variable_indices)
+    user_text_functions = set(user_text_functions or ())
+    user_array_functions = set(user_array_functions or ())
     try:
         transformed, _variables = transform_braced_expression(expression)
     except ValueError as error:
@@ -3474,6 +4156,77 @@ def _c_expression(
             return is_integer_node(node.operand)
         return False
 
+    def render_user_call(node: ast.Call, function_name: str) -> str:
+        expected_arity = user_functions[function_name]
+        if node.keywords or len(node.args) != expected_arity:
+            raise ValueError(
+                f"{function_name} expects {expected_arity} argument(s)"
+            )
+        declared_types = (user_parameter_types or {}).get(function_name, {})
+        rendered_arguments: list[str] = []
+        for index, argument in enumerate(node.args):
+            declared = declared_types.get(index, "number")
+            if declared == "text":
+                rendered_arguments.append(
+                    _render_text_argument(
+                        argument,
+                        function_name,
+                        context,
+                        line,
+                        variable_indices,
+                        local_names,
+                        convert,
+                        user_text_functions,
+                    )
+                )
+            elif declared == "array":
+                rendered_arguments.append(convert_array(argument))
+            elif declared.startswith("record:"):
+                record_type = declared.split(":", 1)[1]
+                schema = _RECORD_SCHEMA.get(record_type) or ()
+                rendered_arguments.append(
+                    _render_record_argument(
+                        argument,
+                        record_type,
+                        convert,
+                        local_names,
+                        {str(field): str(field) for field, _kind in schema},
+                    )
+                )
+            else:
+                array_argument = _is_array_ast_node(argument, array_names) or (
+                    isinstance(argument, ast.Call)
+                    and isinstance(argument.func, ast.Name)
+                    and argument.func.id.lower() in user_array_functions
+                )
+                if array_argument:
+                    raise ValueError(
+                        f"{function_name} parameter #{index + 1} is numeric but received "
+                        "an array; annotate it with ': array'"
+                    )
+                if (
+                    isinstance(argument, ast.Constant)
+                    and isinstance(argument.value, str)
+                ) or (
+                    isinstance(argument, ast.Call)
+                    and isinstance(argument.func, ast.Name)
+                    and argument.func.id.lower() in (user_text_functions or ())
+                ):
+                    raise ValueError(
+                        f"{function_name} parameter #{index + 1} is numeric but received "
+                        "text; annotate it with ': text'"
+                    )
+                rendered_arguments.append(convert(argument))
+        rendered_arguments.extend((call_extras or {}).get(function_name, []))
+        arguments = ", ".join(rendered_arguments)
+        if bigint_mode and bigint_function_suffix:
+            target = (call_targets or {}).get(
+                function_name, f"user_{function_name}{bigint_function_suffix}"
+            )
+            return f"{target}({arguments})"
+        target = (call_targets or {}).get(function_name, f"user_{function_name}")
+        return f"{target}({arguments})"
+
     def convert_array(node: ast.expr) -> str:
         scalar_type = "double complex" if complex_mode else "double"
         literal_constructor = "cosmic_complex_array" if complex_mode else "cosmic_array"
@@ -3483,8 +4236,14 @@ def _c_expression(
             if any(_is_array_ast_node(value, array_names) for value in node.elts):
                 raise ValueError("nested arrays are not supported")
             values = ", ".join(convert(value) for value in node.elts) or "0.0"
-            return f"{literal_constructor}(({scalar_type}[]){{{values}}}, {len(node.elts)})"
+            return (
+                f"{literal_constructor}_owned("
+                f"({scalar_type}[]){{{values}}}, {len(node.elts)}, {line})"
+            )
         if isinstance(node, ast.Name):
+            # 函数内的数组形参直接是 CosmicArray 值。
+            if local_names and node.id in local_names:
+                return local_names[node.id]
             if node.id in array_variable_indices:
                 getter = (
                     "cosmic_get_variable_complex_array"
@@ -3497,6 +4256,12 @@ def _c_expression(
             return f"{getter}({context}, {array_indices[node.id]}, {line})"
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             function_name = node.func.id.lower()
+            if (
+                user_functions
+                and function_name in user_functions
+                and function_name in user_array_functions
+            ):
+                return render_user_call(node, function_name)
             if function_name == "bytes_from_str":
                 if node.keywords or len(node.args) != 1:
                     raise ValueError("bytes_from_str expects one string")
@@ -3531,6 +4296,17 @@ def _c_expression(
                     raise ValueError("array_copy expects one array")
                 helper = "cosmic_complex_array_copy" if complex_mode else "cosmic_array_copy"
                 return f"{helper}({convert_array(node.args[0])}, {line})"
+            if function_name in {"sort_array", "reverse_array"}:
+                if node.keywords or len(node.args) != 1:
+                    raise ValueError(f"{function_name} expects one array")
+                if complex_mode:
+                    raise ValueError(f"{function_name} currently supports real-valued arrays only")
+                helper = "cosmic_array_sort" if function_name == "sort_array" else "cosmic_array_reverse"
+                return f"{helper}({convert_array(node.args[0])}, {line})"
+            if function_name == "random_bytes":
+                if node.keywords or len(node.args) != 1:
+                    raise ValueError("random_bytes expects one length")
+                return f"cosmic_random_bytes((double)({convert(node.args[0])}), {line})"
             if function_name == "solve_linear":
                 if node.keywords or len(node.args) != 2:
                     raise ValueError("solve_linear expects a square matrix and a right-hand side")
@@ -3881,23 +4657,52 @@ def _c_expression(
             string_arities = {
                 "substr_bytes": 3, "find": 2, "trim": 1,
                 "upper": 1, "lower": 1, "replace": 3, "line_count": 1,
+                "split_count": 2, "field": 3, "count_text": 2, "contains_text": 2,
+                "starts_with": 2, "ends_with": 2, "repeat_text": 2,
+                "pad_left": 3, "pad_right": 3, "line_at": 2, "to_number": 1,
             }
             if function_name == "str_from_bytes":
                 if node.keywords or len(node.args) != 1:
                     raise ValueError("str_from_bytes expects one byte array")
                 return f"cosmic_string_from_bytes_owned({convert_array(node.args[0])}, {line})"
+            record_type = _record_literal_type(function_name)
+            if record_type is not None:
+                return _render_record_literal(
+                    record_type,
+                    node,
+                    line,
+                    convert,
+                    context,
+                    variable_indices,
+                    local_names,
+                    user_text_functions,
+                )
+            if function_name in {"text_concat", "to_text", "text_join"}:
+                return _render_text_builder(
+                    function_name,
+                    node,
+                    line,
+                    convert,
+                    convert_array,
+                    local_names,
+                    variable_indices,
+                    context,
+                    user_text_functions,
+                )
             if function_name in string_arities:
                 if node.keywords or len(node.args) != string_arities[function_name]:
                     raise ValueError(f"{function_name} expects {string_arities[function_name]} argument(s)")
                 def string_argument(argument: ast.expr) -> str:
-                    if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
-                        return f"copy_text({_c_string(argument.value)})"
-                    if isinstance(argument, ast.Name) and argument.id.startswith("var_"):
-                        name = argument.id[4:]
-                        if name not in variable_indices:
-                            raise ValueError(f"unknown variable '{name}'")
-                        return f"get_variable({context}, {variable_indices[name]}, {line})"
-                    raise ValueError(f"{function_name} string arguments must be string literals or variables")
+                    return _render_text_argument(
+                        argument,
+                        function_name,
+                        context,
+                        line,
+                        variable_indices,
+                        local_names,
+                        convert,
+                        user_text_functions,
+                    )
                 first = string_argument(node.args[0])
                 if function_name == "substr_bytes":
                     start, length = (convert(argument) for argument in node.args[1:])
@@ -3916,6 +4721,64 @@ def _c_expression(
                     return counted
                 if function_name in {"upper", "lower"}:
                     return f"cosmic_case_{function_name}_owned({first}, {line})"
+                def integer_argument(argument: ast.expr) -> str:
+                    text = convert(argument)
+                    if bigint_mode:
+                        return f"(double)bigint_to_int64({text}, {line})"
+                    return f"(double)({text})"
+
+                def integer_result(expression: str) -> str:
+                    if bigint_mode:
+                        return f"bigint_from_int64((int64_t)({expression}), {line})"
+                    return expression
+
+                if function_name == "split_count":
+                    counted = (
+                        f"cosmic_split_count_owned({first}, "
+                        f"{string_argument(node.args[1])}, {line})"
+                    )
+                    return integer_result(counted)
+                if function_name == "field":
+                    return (
+                        f"cosmic_field_owned({first}, {string_argument(node.args[1])}, "
+                        f"{integer_argument(node.args[2])}, {line})"
+                    )
+                if function_name == "count_text":
+                    counted = (
+                        f"cosmic_count_text_owned({first}, "
+                        f"{string_argument(node.args[1])}, {line})"
+                    )
+                    return integer_result(counted)
+                if function_name == "contains_text":
+                    counted = (
+                        f"cosmic_contains_text_owned({first}, "
+                        f"{string_argument(node.args[1])})"
+                    )
+                    return integer_result(counted)
+                if function_name in {"starts_with", "ends_with"}:
+                    counted = (
+                        f"cosmic_{function_name}_owned({first}, "
+                        f"{string_argument(node.args[1])})"
+                    )
+                    return integer_result(counted)
+                if function_name == "repeat_text":
+                    return (
+                        f"cosmic_repeat_text_owned({first}, "
+                        f"{integer_argument(node.args[1])}, {line})"
+                    )
+                if function_name in {"pad_left", "pad_right"}:
+                    side = "1" if function_name == "pad_left" else "0"
+                    return (
+                        f"cosmic_pad_owned({first}, {integer_argument(node.args[1])}, "
+                        f"{string_argument(node.args[2])}, {side}, {line})"
+                    )
+                if function_name == "line_at":
+                    return (
+                        f"cosmic_line_at_owned({first}, "
+                        f"{integer_argument(node.args[1])}, {line})"
+                    )
+                if function_name == "to_number":
+                    return f"cosmic_to_number_owned({first}, {line})"
                 return (
                     f"cosmic_replace_owned({first}, {string_argument(node.args[1])}, "
                     f"{string_argument(node.args[2])}, {line})"
@@ -3945,8 +4808,28 @@ def _c_expression(
                 if node.keywords or len(node.args) != 1:
                     raise ValueError("abs expects one argument")
                 return f"bigint_absolute({convert(node.args[0])})"
+            if function_name == "now_ms":
+                if node.args or node.keywords:
+                    raise ValueError("now_ms expects no arguments")
+                if bigint_mode:
+                    return f"bigint_from_int64((int64_t)cosmic_now_ms(), {line})"
+                return "cosmic_now_ms()"
+            if function_name == "random_secure":
+                if node.keywords or len(node.args) != 2:
+                    raise ValueError("random_secure expects a lower and an upper bound")
+                bounds = []
+                for argument in node.args:
+                    text = convert(argument)
+                    if bigint_mode:
+                        text = f"bigint_to_int64({text}, {line})"
+                    bounds.append(f"(double)({text})")
+                call = f"cosmic_random_secure({bounds[0]}, {bounds[1]}, {line})"
+                if bigint_mode:
+                    return f"bigint_from_int64((int64_t){call}, {line})"
+                return call
             array_consumers = {
                 "array_len", "array_set", "array_push", "array_sum", "array_at",
+                "array_index_of",
                 "bytes_len", "bytes_get",
                 "mean", "std", "min", "max", "dot", "blas_dot",
                 "matrix2_det", "matrix2_mul_entry", "lapack_determinant2",
@@ -3960,9 +4843,17 @@ def _c_expression(
                 "matrix_transpose", "matrix2_inverse", "matrix3_inverse",
             }:
                 return convert_matrix_call(function_name, node)
-            if function_name not in array_consumers and any(
-                _is_array_ast_node(argument, array_names)
-                for argument in node.args
+            accepts_arrays = any(
+                kind == "array"
+                for kind in ((user_parameter_types or {}).get(function_name) or {}).values()
+            )
+            if (
+                not accepts_arrays
+                and function_name not in array_consumers
+                and any(
+                    _is_array_ast_node(argument, array_names)
+                    for argument in node.args
+                )
             ):
                 raise ValueError("array values must be passed to an array function")
             if (
@@ -4038,6 +4929,20 @@ def _c_expression(
                 return f"cosmic_array_{function_name}({array}, {line})"
             if function_name in {"array_set", "array_push", "array_fill", "array_copy", "bytes_from_str"}:
                 return convert_array(node)
+            if function_name == "array_index_of":
+                if node.keywords or len(node.args) != 2:
+                    raise ValueError("array_index_of expects an array and a value")
+                if complex_mode:
+                    raise ValueError("array_index_of currently supports real-valued arrays only")
+                if _is_array_ast_node(node.args[1], array_names):
+                    raise ValueError("array_index_of value must be numeric")
+                found = (
+                    f"cosmic_array_index_of({convert_array(node.args[0])}, "
+                    f"(double)({convert(node.args[1])}), {line})"
+                )
+                if bigint_mode:
+                    return f"bigint_from_int64((int64_t){found}, {line})"
+                return found
             if function_name in {"array_sum", "array_at"}:
                 expected_arity = 1 if function_name == "array_sum" else 2
                 if node.keywords or len(node.args) != expected_arity:
@@ -4156,21 +5061,7 @@ def _c_expression(
                     f"({convert(node.args[2])}))"
                 )
             if user_functions and function_name in user_functions:
-                expected_arity = user_functions[function_name]
-                if node.keywords or len(node.args) != expected_arity:
-                    raise ValueError(
-                        f"{function_name} expects {expected_arity} argument(s)"
-                    )
-                rendered_arguments = [convert(argument) for argument in node.args]
-                rendered_arguments.extend((call_extras or {}).get(function_name, []))
-                arguments = ", ".join(rendered_arguments)
-                if bigint_mode and bigint_function_suffix:
-                    target = (call_targets or {}).get(
-                        function_name, f"user_{function_name}{bigint_function_suffix}"
-                    )
-                    return f"{target}({arguments})"
-                target = (call_targets or {}).get(function_name, f"user_{function_name}")
-                return f"{target}({arguments})"
+                return render_user_call(node, function_name)
             if function_name in {"read_text", "write_text"}:
                 expected_arity = 1 if function_name == "read_text" else 2
                 if node.keywords or len(node.args) != expected_arity:
@@ -4310,7 +5201,7 @@ def _c_expression(
                 elif (
                     isinstance(argument, ast.Call)
                     and isinstance(argument.func, ast.Name)
-                    and argument.func.id.lower() == "char_at"
+                    and argument.func.id.lower() in _STRING_RESULT_BUILTINS
                 ):
                     text = convert(argument)
                     if bigint_mode:
@@ -4318,8 +5209,30 @@ def _c_expression(
                             f"bigint_from_int64((int64_t)unicode_strlen_owned({text}), {line})"
                         )
                     return f"((double)unicode_strlen_owned({text}))"
+                elif isinstance(argument, ast.Name) and local_names and argument.id in local_names:
+                    text = local_names[argument.id]
+                    if bigint_mode:
+                        return (
+                            f"bigint_from_int64((int64_t)unicode_strlen_owned(copy_text({text})), {line})"
+                        )
+                    return f"((double)unicode_strlen_owned(copy_text({text})))"
+                elif (
+                    isinstance(argument, ast.Call)
+                    and isinstance(argument.func, ast.Name)
+                    and argument.func.id.lower() in user_text_functions
+                ):
+                    # 返回文本的用户函数（v10：`strlen(build(...))`）
+                    text = convert(argument)
+                    if bigint_mode:
+                        return (
+                            f"bigint_from_int64((int64_t)unicode_strlen_owned({text}), {line})"
+                        )
+                    return f"((double)unicode_strlen_owned({text}))"
                 else:
-                    raise ValueError("strlen expects a string literal, variable, or char_at result")
+                    raise ValueError(
+                        "strlen expects a string literal, a variable, "
+                        "or a text-returning builtin call"
+                    )
                 if bigint_mode:
                     return f"bigint_from_int64((int64_t)unicode_strlen({text}), {line})"
                 return f"((double)unicode_strlen({text}))"
@@ -4551,6 +5464,9 @@ class CGenerator:
         report_heap: bool = False,
     ) -> None:
         self.program = program
+        self.record_names = {
+            str(name).lower() for name, _fields in getattr(program, "records", ())
+        }
         self.max_loop_iterations = max_loop_iterations
         self.no_input = no_input
         self.report_heap = report_heap
@@ -4567,9 +5483,14 @@ class CGenerator:
         self.uses_lapack = False
         self.uses_dll = bool(program.extern_functions)
         self.bigint_call_overrides = False
+        # 生成循环体时递增：循环体内的 var 声明允许覆盖式初始化（v10 B4）。
+        self._loop_depth = 0
         self.uses_atom = False
         self._statement_function_loop_count = 0
         self.atom_chains: dict[str, tuple[str, ...]] = {}
+        # 只有被 proton 链调度的执行块才交给 atom 线程池；其余块仍同步执行，
+        # 与解释器逐句执行时的行为保持一致。
+        self.atom_scheduled_blocks: set[str] = set()
         self._scan(program.statements)
         self._validate_jumps(program.statements)
         self._validate_calls(program.statements)
@@ -4609,6 +5530,15 @@ class CGenerator:
         }
 
     def generate(self) -> str:
+        global _RECORD_SCHEMA
+        field_types = self._record_field_types()
+        _RECORD_SCHEMA = {
+            str(record_name): tuple(
+                (str(field), field_types.get(str(record_name), {}).get(str(field), "number"))
+                for field in fields
+            )
+            for record_name, fields in getattr(self.program, "records", ())
+        }
         variable_count = max(1, len(self.variable_indices))
         block_count = max(1, len(self.blocks))
         tape_count = max(1, len(self.tape_indices))
@@ -4632,6 +5562,7 @@ class CGenerator:
             f"#define COSMIC_MEMORY_ARENA {1 if self.program.memory_mode == 'arena' else 0}",
             f"#define COSMIC_MEMORY_STATIC {1 if self.program.memory_mode == 'static' else 0}",
             f"#define COSMIC_MAXLEN {self.program.maxlen}",
+            f"#define COSMIC_TEXT_PRECISION {self.program.output_precision}",
             f"#define COSMIC_ON_OOM_ERROR {1 if self.program.on_oom == 'error' else 0}",
             f"#define COSMIC_FEATURE_BIGINT {0 if 'no-bigint' in self.program.features else 1}",
             f"#define COSMIC_FEATURE_ARRAY {0 if 'no-array' in self.program.features else 1}",
@@ -4639,6 +5570,7 @@ class CGenerator:
             _C_RUNTIME,
             "",
         ]
+        output.extend(self._generate_record_structs())
         if self.uses_blas:
             output.append(_BLAS_RUNTIME)
         if self.uses_lapack:
@@ -4665,14 +5597,14 @@ class CGenerator:
                     [
                         f"static void *cosmic_atom_thread_{block.index}(void *argument) {{",
                         f"    AtomBlock *block = (AtomBlock *)argument;",
-                        f"    Result local = {{ STATUS_OK, NULL }};",
+                        f"    Result local = {{ STATUS_OK, RESULT_NONE }};",
                         f"    cosmic_current_stop = &block->stop;",
                         f"    block->runner(NULL, 0, &local);",
                         f"    cosmic_current_stop = NULL;",
                         f"    cosmic_mutex_lock(&block->state_lock);",
                         f"    block->state = block->stop ? ATOM_STOPPED : (local.status == STATUS_OK ? ATOM_OK : (local.status == STATUS_STOP ? ATOM_STOP : ATOM_ERROR));",
                         f"    cosmic_mutex_unlock(&block->state_lock);",
-                        f"    free(local.value);",
+                        f"    release_result(&local);",
                         f"    return NULL;",
                         f"}}",
                         "",
@@ -4682,8 +5614,11 @@ class CGenerator:
             self.bigint_call_overrides and self.program.math_mode != "bigint"
         )
         emitted_functions = self._reachable_functions()
+        # 只有「纯数值」的函数才有 BigInt 变体：文本/数组/记录参数或返回值的函数
+        # 在 -bigint 表达式里没有意义，硬生成会产出编译不过的 C。
+        bigint_functions = self._bigint_capable_functions(emitted_functions)
         if needs_bigint_variants:
-            for name, statement in emitted_functions.items():
+            for name, statement in bigint_functions.items():
                 parameters = statement.data["parameters"]
                 signature = ", ".join(
                     "BigInt param_" + str(value) for value in parameters
@@ -4693,13 +5628,20 @@ class CGenerator:
                 )
         for name, statement in emitted_functions.items():
             parameters = statement.data["parameters"]
-            value_type = (
+            declared_types = statement.data.get("parameter_types") or {}
+            if not isinstance(declared_types, dict):
+                declared_types = {}
+            scalar_type = (
                 "BigInt" if self.program.math_mode == "bigint"
                 else "uint32_t" if self.program.math_mode == "uint32"
                 else "double complex" if self.program.math_mode == "complex"
                 else "double"
             )
-            signature = ", ".join(value_type + " param_" + str(value) for value in parameters)
+            value_type = self._function_return_value_type(name, statement, scalar_type)
+            signature = ", ".join(
+                self._parameter_declaration(statement, str(parameter), scalar_type)
+                for parameter in parameters
+            )
             output.append(f"static {value_type} user_{name}({signature or 'void'});")
         if emitted_functions:
             output.append("static unsigned int cosmic_function_depth = 0;")
@@ -4707,7 +5649,7 @@ class CGenerator:
         for name, statement in emitted_functions.items():
             output.extend(self._generate_function(name, statement))
         if needs_bigint_variants:
-            for name, statement in emitted_functions.items():
+            for name, statement in bigint_functions.items():
                 output.extend(self._generate_bigint_function(name, statement))
         for block in self.blocks:
             output.extend(self._generate_block(block))
@@ -4792,6 +5734,7 @@ class CGenerator:
                     self.atom_chains[chain_name] = tuple(
                         str(name) for name in statement.data["blocks"]
                     )
+                    self.atom_scheduled_blocks.update(self.atom_chains[chain_name])
                 if statement.kind == "lock":
                     for child in statement.body:
                         self._scan_atom_body(child)
@@ -5020,13 +5963,35 @@ class CGenerator:
                 suffix="",
             )
         parameters = tuple(str(value) for value in statement.data["parameters"])
-        value_type = (
+        text_return = str(self._effective_return_type(statement) or "").lower() in {
+            "text", "string", "str"
+        }
+        array_return = self._function_returns_array(name)
+        scalar_type = (
             "BigInt" if self.program.math_mode == "bigint"
             else "uint32_t" if self.program.math_mode == "uint32"
             else "double complex" if self.program.math_mode == "complex"
             else "double"
         )
-        signature = ", ".join(value_type + " param_" + value for value in parameters)
+        record_return = self._function_returns_record(name)
+        value_type = (
+            "char *" if text_return
+            else f"CosmicRec_{record_return}" if record_return
+            else self._array_value_type() if array_return
+            else scalar_type
+        )
+        signature = ", ".join(
+            self._parameter_declaration(statement, parameter, scalar_type)
+            for parameter in parameters
+        )
+        expression_locals = {parameter: "param_" + parameter for parameter in parameters}
+        for parameter in parameters:
+            expression_locals[f"var_{parameter}"] = "param_" + parameter
+        for parameter, fields in self._record_parameter_fields(statement).items():
+            for field in fields:
+                expression_locals[f"{parameter}__{field}"] = (
+                    f"param_{parameter}.{field}"
+                )
         if self.program.math_mode == "bigint":
             try:
                 transformed, _ = transform_braced_expression(
@@ -5062,17 +6027,107 @@ class CGenerator:
             bigint_mode=self.program.math_mode == "bigint",
             uint32_mode=self.program.math_mode == "uint32",
             complex_mode=self.program.math_mode == "complex",
+            local_names=expression_locals,
+            user_text_functions=self._user_text_functions(),
+            user_array_functions=self._user_array_functions(),
+            array_mode=array_return,
         )
+        if text_return:
+            if _is_plain_string_literal(str(statement.data["expression"])):
+                expression = f"copy_text({expression})"
+            return [
+                f"static char *user_{name}({signature or 'void'}) {{",
+                f"    if (cosmic_function_depth >= 256) fail_at({statement.line}, \"function recursion depth exceeded\");",
+                "    ++cosmic_function_depth;",
+                f"    char *result = {expression};",
+                "    --cosmic_function_depth;",
+                "    return result;",
+                "}",
+                "",
+            ]
+        cast = "" if array_return else f"({value_type})"
         return [
             f"static {value_type} user_{name}({signature or 'void'}) {{",
             f"    if (cosmic_function_depth >= 256) fail_at({statement.line}, \"function recursion depth exceeded\");",
             "    ++cosmic_function_depth;",
-            f"    {value_type} result = ({value_type})({expression});",
+            f"    {value_type} result = {cast}({expression});",
             "    --cosmic_function_depth;",
             "    return result;",
             "}",
             "",
         ]
+
+    def _bigint_capable_functions(
+        self, emitted_functions: dict[str, Statement]
+    ) -> dict[str, Statement]:
+        """哪些函数能生成 BigInt 变体。
+
+        纯数值只是必要条件；如果函数体里调用了「没有 BigInt 变体」的函数
+        （文本/数组/记录函数），生成的变体就会调用不存在的符号，所以这里做
+        一次不动点收缩：把引用了不合格函数的候选一个个剔掉。
+        """
+        candidates = {
+            name: statement
+            for name, statement in emitted_functions.items()
+            if self._supports_bigint_variant(statement)
+        }
+        changed = True
+        while changed:
+            changed = False
+            for name in list(candidates):
+                callees = self._called_names(candidates[name])
+                if any(
+                    callee in emitted_functions and callee not in candidates
+                    for callee in callees
+                ):
+                    del candidates[name]
+                    changed = True
+        return candidates
+
+    def _called_names(self, statement: Statement) -> set[str]:
+        """函数声明里出现的、形如函数名的标识符（保守：名字匹配即可）。"""
+        known = set(self.functions)
+        found: set[str] = set()
+        for expression in _function_expressions(statement):
+            try:
+                tree = ast.parse(expression, mode="eval")
+            except SyntaxError:
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                    callee = node.func.id.lower()
+                    if callee in known:
+                        found.add(callee)
+        for child in _walk_function_body(tuple(statement.data.get("body") or ())):
+            for key in ("expression", "condition"):
+                text = child.data.get(key)
+                if not isinstance(text, str):
+                    continue
+                try:
+                    tree = ast.parse(text, mode="eval")
+                except SyntaxError:
+                    continue
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                        callee = node.func.id.lower()
+                        if callee in known:
+                            found.add(callee)
+        return found
+
+    def _supports_bigint_variant(self, statement: Statement) -> bool:
+        """纯数值函数才生成 BigInt 变体（文本/数组/记录参数与返回值都不行）。"""
+        declared = str(statement.data.get("return_type") or "").lower()
+        if declared in {"text", "string", "str", "array", "list"}:
+            return False
+        name = str(statement.data.get("name") or "").lower()
+        if name and (self._function_returns_text(name) or self._function_returns_array(name)):
+            return False
+        if name and self._function_returns_record(name):
+            return False
+        for parameter in statement.data["parameters"]:
+            if self._parameter_declared_kind(statement, str(parameter)) != "":
+                return False
+        return True
 
     def _generate_bigint_function(self, name: str, statement: Statement) -> list[str]:
         if statement.data.get("body") is not None:
@@ -5115,6 +6170,418 @@ class CGenerator:
             else "double"
         )
 
+    def _infer_text_parameters(self, statement: Statement) -> set[str]:
+        """未标注类型的参数若出现在字符串内置的文本位置，推断为 text。"""
+        parameters = {str(value) for value in statement.data["parameters"]}
+        if not parameters:
+            return set()
+        guard: set[int] = getattr(self, "_text_inference_guard", None) or set()
+        self._text_inference_guard = guard
+        if id(statement) in guard:
+            return set()
+        guard.add(id(statement))
+        try:
+            found: set[str] = set()
+            for expression in _function_expressions(statement):
+                transformed, _ = transform_braced_expression(expression)
+                try:
+                    tree = ast.parse(normalize_rag_calls(transformed), mode="eval")
+                except SyntaxError:
+                    continue
+                for node in ast.walk(tree):
+                    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+                        continue
+                    builtin = node.func.id.lower()
+                    if builtin in _TEXT_ARGUMENT_BUILTINS:
+                        positions = _TEXT_ARGUMENT_POSITIONS.get(builtin)
+                        if positions is not None:
+                            arguments = tuple(
+                                node.args[position]
+                                for position in positions
+                                if position < len(node.args)
+                            )
+                        elif builtin in _TAKE_ALL_ARGUMENTS_FUNCTIONS:
+                            arguments = node.args
+                        else:
+                            arguments = (node.args[0],) if node.args else ()
+                    else:
+                        # 传给「文本形参」的实参同样是文本，沿用户函数传播。
+                        positions = self._function_parameter_types(builtin)
+                        arguments = tuple(
+                            node.args[position]
+                            for position in positions
+                            if position < len(node.args)
+                        )
+                    for argument in arguments:
+                        if isinstance(argument, ast.Name):
+                            name = argument.id[4:] if argument.id.startswith("var_") else argument.id
+                            if name in parameters:
+                                found.add(name)
+            return found
+        finally:
+            guard.discard(id(statement))
+
+    def _infer_array_parameters(self, statement: Statement) -> set[str]:
+        """未标注类型的参数若出现在数组内置的数组位置，推断为 array。"""
+        parameters = {str(value) for value in statement.data["parameters"]}
+        if not parameters:
+            return set()
+        guard: set[int] = getattr(self, "_array_inference_guard", None) or set()
+        self._array_inference_guard = guard
+        if id(statement) in guard:
+            return set()
+        guard.add(id(statement))
+        try:
+            found: set[str] = set()
+
+            def mark(argument: ast.expr) -> None:
+                if isinstance(argument, ast.Name):
+                    name = (
+                        argument.id[4:] if argument.id.startswith("var_") else argument.id
+                    )
+                    if name in parameters:
+                        found.add(name)
+
+            for expression in _function_expressions(statement):
+                transformed, _ = transform_braced_expression(expression)
+                try:
+                    tree = ast.parse(normalize_rag_calls(transformed), mode="eval")
+                except SyntaxError:
+                    continue
+                for node in ast.walk(tree):
+                    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+                        continue
+                    builtin = node.func.id.lower()
+                    positions = _ARRAY_ARGUMENT_POSITIONS.get(builtin)
+                    if positions is not None:
+                        for position in positions:
+                            if position < len(node.args):
+                                mark(node.args[position])
+                        continue
+                    # 传给「数组形参」的实参同样是数组，沿用户函数传播。
+                    for position in self._function_array_positions(builtin):
+                        if position < len(node.args):
+                            mark(node.args[position])
+            return found
+        finally:
+            guard.discard(id(statement))
+
+    def _function_array_positions(self, function_name: str) -> tuple[int, ...]:
+        statement = self.functions.get(function_name)
+        if statement is None:
+            return ()
+        declared = statement.data.get("parameter_types") or {}
+        if not isinstance(declared, dict):
+            declared = {}
+        array_names = {
+            parameter
+            for parameter, type_name in declared.items()
+            if str(type_name).lower() in {"array", "list"}
+        }
+        array_names |= self._infer_array_parameters(statement)
+        parameters = [str(value) for value in statement.data["parameters"]]
+        return tuple(
+            index
+            for index, parameter in enumerate(parameters)
+            if parameter in array_names
+        )
+
+    def _function_parameter_types(self, function_name: str) -> dict[int, str]:
+        """返回 ``{位置: 'text'|'array'}``，供调用点决定实参怎么渲染。"""
+        statement = self.functions.get(function_name)
+        if statement is None:
+            return {}
+        declared = statement.data.get("parameter_types") or {}
+        if not isinstance(declared, dict):
+            declared = {}
+        record_fields = self._record_parameter_fields(statement)
+        kinds: dict[int, str] = {
+            index: "array" for index in self._function_array_positions(function_name)
+        }
+        parameters = [str(value) for value in statement.data["parameters"]]
+        for index, parameter in enumerate(parameters):
+            if parameter in record_fields:
+                kinds[index] = "record:" + record_fields[parameter][0]
+        text_names = {
+            parameter
+            for parameter, type_name in declared.items()
+            if str(type_name).lower() in {"text", "string", "str"}
+        }
+        text_names |= self._infer_text_parameters(statement)
+        parameters = [str(value) for value in statement.data["parameters"]]
+        for index, parameter in enumerate(parameters):
+            if parameter in text_names:
+                kinds[index] = "text"
+        return kinds
+
+    def _function_returns_array(self, function_name: str) -> bool:
+        statement = self.functions.get(function_name)
+        if statement is None:
+            return False
+        declared = str(statement.data.get("return_type") or "").lower()
+        if declared in {"array", "list"}:
+            return True
+        if declared:
+            # 记录用 struct 表示，不再走数组通道。
+            return False
+        guard: set[str] = getattr(self, "_array_return_guard", None) or set()
+        self._array_return_guard = guard
+        if function_name in guard:
+            return False
+        guard.add(function_name)
+        try:
+            for expression in _function_return_expressions(statement):
+                transformed, _ = transform_braced_expression(expression)
+                try:
+                    body = ast.parse(transformed.strip(), mode="eval").body
+                except SyntaxError:
+                    continue
+                if isinstance(body, ast.List):
+                    return True
+                if isinstance(body, ast.Call) and isinstance(body.func, ast.Name):
+                    callee = body.func.id.lower()
+                    if callee in _ARRAY_RESULT_BUILTINS:
+                        return True
+                    if callee in self.functions and self._function_returns_array(callee):
+                        return True
+            return False
+        finally:
+            guard.discard(function_name)
+
+    def _user_array_functions(self) -> set[str]:
+        """所有返回数组的用户函数名，供表达式层识别「数组函数调用」。"""
+        return {
+            name for name in self.functions if self._function_returns_array(name)
+        }
+
+    def _user_text_functions(self) -> set[str]:
+        """所有返回文本的用户函数名，供表达式层识别「文本函数调用」。"""
+        return {
+            name for name in self.functions if self._function_returns_text(name)
+        }
+
+    def _user_parameter_type_map(self) -> dict[str, dict[int, str]]:
+        """所有用户函数的文本参数位置表，传给 ``_c_expression``。"""
+        return {
+            name: types
+            for name in self.functions
+            if (types := self._function_parameter_types(name))
+        }
+
+    def _function_returns_text(self, function_name: str) -> bool:
+        statement = self.functions.get(function_name)
+        if statement is None:
+            return False
+        declared = str(statement.data.get("return_type") or "").lower()
+        if declared in {"text", "string", "str"}:
+            return True
+        if declared:
+            return False
+        guard: set[str] = getattr(self, "_return_type_guard", None) or set()
+        self._return_type_guard = guard
+        if function_name in guard:
+            return False
+        guard.add(function_name)
+        try:
+            # 没有标注时按 return 表达式推断（不能看整段函数体：函数体里出现
+            # text_concat 的局部量不代表函数返回文本）。
+            for expression in _function_return_expressions(statement):
+                if _is_string_expression(expression):
+                    return True
+                if (
+                    _user_text_call_target(
+                        expression, self.functions, self._function_returns_text
+                    )
+                    is not None
+                ):
+                    return True
+            # `return acc`：返回的是文本局部量时，函数同样返回文本。
+            local_kinds = self._function_local_kinds(statement)
+            if local_kinds:
+                for expression in _function_return_expressions(statement):
+                    try:
+                        body = ast.parse(expression, mode="eval").body
+                    except SyntaxError:
+                        continue
+                    if isinstance(body, ast.Name) and local_kinds.get(body.id) == "text":
+                        return True
+            return False
+        finally:
+            guard.discard(function_name)
+
+    def _effective_return_type(self, statement: Statement) -> str | None:
+        declared = str(statement.data.get("return_type") or "")
+        if declared:
+            return declared
+        name = str(statement.data.get("name") or "")
+        if name and self._function_returns_text(name):
+            return "text"
+        for expression in _function_return_expressions(statement):
+            if _is_string_expression(expression):
+                return "text"
+        return None
+
+    def _c_parameter_declaration(
+        self,
+        parameter: str,
+        declared_type: str,
+        value_type: str | None = None,
+        record_type: str | None = None,
+    ) -> str:
+        if declared_type in {"text", "string", "str"}:
+            return "const char *param_" + parameter
+        if declared_type in {"array", "list"}:
+            return self._array_value_type() + " param_" + parameter
+        if declared_type == "record" and record_type:
+            return f"{self._record_struct_name(record_type)} param_" + parameter
+        return (value_type or self._function_value_type()) + " param_" + parameter
+
+    def _function_returns_record(self, function_name: str) -> str | None:
+        """函数声明的记录返回类型（``-> Point``）；没有则 None。"""
+        statement = self.functions.get(str(function_name).lower())
+        if statement is None:
+            return None
+        declared = str(statement.data.get("return_type") or "")
+        if not declared:
+            return None
+        # record_names 是小写集合，这里要还原规范记录名（struct 名字用）。
+        for name, _fields in getattr(self.program, "records", ()):
+            if str(name).lower() == declared.lower():
+                return str(name)
+        return None
+
+    def _array_value_type(self) -> str:
+        return "CosmicComplexArray" if self.program.math_mode == "complex" else "CosmicArray"
+
+    def _parameter_declaration(
+        self, statement: Statement, parameter: str, scalar_type: str
+    ) -> str:
+        kind = self._parameter_declared_kind(statement, parameter)
+        record_type = self._record_parameter_fields(statement).get(parameter)
+        return self._c_parameter_declaration(
+            parameter,
+            kind,
+            scalar_type,
+            record_type[0] if record_type else None,
+        )
+
+    def _record_parameter_fields(
+        self, statement: Statement
+    ) -> dict[str, tuple[str, str, ...]]:
+        """``形参 -> (记录名, 字段...)``。"""
+        fields = statement.data.get("parameter_fields") or {}
+        if not isinstance(fields, dict):
+            return {}
+        declared = statement.data.get("parameter_types") or {}
+        result: dict[str, tuple[str, str, ...]] = {}
+        for parameter, names in fields.items():
+            record_type = str(declared.get(parameter) or "")
+            result[str(parameter)] = (record_type, *(str(n) for n in names))
+        return result
+
+    def _parameter_declared_kind(self, statement: Statement, parameter: str) -> str:
+        """``参数 -> 'text' | 'array' | ''``，标注优先，其次按函数体推断。"""
+        record_fields = statement.data.get("parameter_fields") or {}
+        if isinstance(record_fields, dict) and parameter in record_fields:
+            # 记录参数在 C 侧按 struct 传值。
+            return "record"
+        declared = statement.data.get("parameter_types") or {}
+        if not isinstance(declared, dict):
+            declared = {}
+        kind = str(declared.get(parameter, "")).lower()
+        if kind in {"text", "string", "str"}:
+            return "text"
+        if kind in {"array", "list"}:
+            return "array"
+        if parameter in self._infer_text_parameters(statement):
+            return "text"
+        if parameter in self._infer_array_parameters(statement):
+            return "array"
+        return ""
+
+    def _record_field_types(self) -> dict[str, dict[str, str]]:
+        """``记录名 -> {字段: 'number'|'text'}``（来自 parser 的 record_types）。"""
+        types = getattr(self.program, "record_types", None) or ()
+        return {str(name): dict(fields) for name, fields in types}
+
+    def _record_struct_name(self, record_name: str) -> str:
+        return f"CosmicRec_{record_name}"
+
+    def _generate_record_structs(self) -> list[str]:
+        """v10 B7：记录在 C 侧是真 struct，字段可以是 double 或 const char *。"""
+        lines: list[str] = []
+        for record_name, fields in getattr(self.program, "records", ()):
+            field_types = self._record_field_types().get(str(record_name), {})
+            members = "; ".join(
+                f"{'const char *' if field_types.get(str(field)) == 'text' else 'double'} {field}"
+                for field in fields
+            )
+            lines.append(
+                f"typedef struct {{ {members}; }} {self._record_struct_name(str(record_name))};"
+            )
+        if lines:
+            lines.append("")
+        return lines
+
+    def _c_depth_limit(self) -> int:
+        """编译版的递归上限。比解释器保守：每帧占用真实系统栈。"""
+        return 1024
+
+    def _function_local_kinds(self, statement: Statement) -> dict[str, str]:
+        """``局部量 -> 'text'``；没列出的按数值处理。
+
+        文本返回值的函数里局部量不能一律声明成 ``char *``：``let i = 0`` 必须是 double，
+        否则 ``i = i + 1`` 会生成非法的指针运算。
+        """
+        kinds: dict[str, str] = {}
+        body = tuple(statement.data.get("body") or ())
+        # 记录局部量的文本字段也是文本值（`a__kind`），返回它们同样是文本返回。
+        field_types = self._record_field_types()
+        for child in _walk_function_body(body):
+            if child.kind in {
+                "function_record_local",
+                "function_record_copy",
+                "function_record_assign",
+                "function_record_call_local",
+            }:
+                base = str(child.data["name"])
+                record_name = str(child.data.get("record") or "")
+                for field in child.data.get("record_fields") or ():
+                    if field_types.get(record_name, {}).get(str(field)) == "text":
+                        kinds[f"{base}__{field}"] = "text"
+        for child in _walk_function_body(body):
+            if child.kind != "function_local":
+                continue
+            name = str(child.data["name"])
+            if name in kinds:
+                continue
+            expression = str(child.data["expression"])
+            if _is_plain_string_literal(expression) or _is_string_expression(expression):
+                kinds[name] = "text"
+                continue
+            if (
+                _user_text_call_target(
+                    expression, self.functions, self._function_returns_text
+                )
+                is not None
+            ):
+                kinds[name] = "text"
+        return kinds
+
+    def _function_return_value_type(
+        self, name: str, statement: Statement, scalar_type: str
+    ) -> str:
+        if str(self._effective_return_type(statement) or "").lower() in {
+            "text", "string", "str"
+        }:
+            return "char *"
+        record_type = self._function_returns_record(name)
+        if record_type:
+            return self._record_struct_name(record_type)
+        if self._function_returns_array(name):
+            return self._array_value_type()
+        return scalar_type
+
     def _generate_statement_function(
         self,
         name: str,
@@ -5125,17 +6592,64 @@ class CGenerator:
     ) -> list[str]:
         parameters = tuple(str(value) for value in statement.data["parameters"])
         body = tuple(statement.data.get("body") or ())
-        value_type = "BigInt" if bigint_mode else self._function_value_type()
-        signature = ", ".join(value_type + " param_" + value for value in parameters)
+        text_return = str(self._effective_return_type(statement) or "").lower() in {
+            "text", "string", "str"
+        }
+        array_return = self._function_returns_array(name)
+        record_return = self._function_returns_record(name)
+        scalar_type = "BigInt" if bigint_mode else self._function_value_type()
+        value_type = (
+            "char *" if text_return
+            else f"CosmicRec_{record_return}" if record_return
+            else self._array_value_type() if array_return
+            else scalar_type
+        )
+        signature = ", ".join(
+            self._parameter_declaration(statement, parameter, scalar_type)
+            for parameter in parameters
+        )
         local_names = {parameter: "param_" + parameter for parameter in parameters}
+        # 函数体内 `{param}` 会被变换成 var_param；映射到同一个 C 形参。
+        for parameter in parameters:
+            local_names[f"var_{parameter}"] = "param_" + parameter
+        for parameter, fields in self._record_parameter_fields(statement).items():
+            for field in fields:
+                local_names[f"{parameter}__{field}"] = f"param_{parameter}.{field}"
+        global _ACTIVE_LOCAL_RECORDS
+        _ACTIVE_LOCAL_RECORDS = {}
+        for child in _walk_function_body(body):
+            if child.kind in {
+                "function_record_local",
+                "function_record_copy",
+                "function_record_assign",
+                "function_record_call_local",
+            }:
+                record_name = str(child.data.get("record") or "")
+                if not record_name and child.kind in {"function_record_copy", "function_record_assign"}:
+                    # 拷贝语句没有 record 字段，从源局部量继承类型。
+                    record_name = _ACTIVE_LOCAL_RECORDS.get(
+                        str(child.data.get("source") or ""), ""
+                    )
+                if record_name:
+                    _ACTIVE_LOCAL_RECORDS[str(child.data["name"])] = record_name
         locals_in_order = _function_locals(body)
         for local in locals_in_order:
             local_names[local] = "local_" + local
+            local_names[f"var_{local}"] = "local_" + local
         record_fields = _function_record_fields(body)
         for base, field in record_fields:
             local_names[f"{base}__{field}"] = f"local_{base}__{field}"
         exit_label = f"cosmic_function_exit_{name}{suffix}"
-        initializer = "{0}" if bigint_mode else f"({value_type})(0)"
+        if text_return:
+            initializer = "NULL"
+        elif record_return:
+            initializer = f"({value_type}){{0}}"
+        elif array_return:
+            initializer = f"({value_type}){{NULL, 0}}"
+        elif bigint_mode:
+            initializer = "{0}"
+        else:
+            initializer = f"({value_type})(0)"
         nested_functions: dict[str, int] = {}
         call_targets: dict[str, str] = {}
         call_extras: dict[str, list[str]] = {}
@@ -5167,16 +6681,51 @@ class CGenerator:
                     nested_functions,
                 )
             )
+        # 数组/记录返回值时，局部量与字段仍然是标量；文本返回值时逐个局部量判类型
+        # （数值局部量必须是 double，否则 i = i + 1 会生成非法的指针算术）。
+        if array_return:
+            local_type = scalar_type
+            local_initializer = f"({scalar_type})(0)"
+        else:
+            local_type = value_type
+            local_initializer = initializer
+        local_kinds: dict[str, str] = {}
+        if text_return or True:
+            # 文本形参也要登记，print 片段要据此决定按文本还是数值渲染。
+            for parameter in parameters:
+                if self._parameter_declared_kind(statement, parameter) == "text":
+                    local_kinds[parameter] = "text"
+            local_kinds.update(self._function_local_kinds(statement))
+        previous_kinds = getattr(self, "_active_local_kinds", {})
+        self._active_local_kinds = local_kinds
         lines = [
             f"static {value_type} user_{name}{suffix}({signature or 'void'}) {{",
-            f"    if (cosmic_function_depth >= 256) fail_at({statement.line}, \"function recursion depth exceeded\");",
+            f"    if (cosmic_function_depth >= {self._c_depth_limit()}) fail_at({statement.line}, \"function recursion depth exceeded\");",
             "    ++cosmic_function_depth;",
             f"    {value_type} result = {initializer};",
         ]
+        scalar_locals = array_return or text_return or bool(record_return)
+        numeric_local_type = scalar_type if scalar_locals else local_type
+        numeric_local_initializer = (
+            f"({scalar_type})(0)" if scalar_locals else local_initializer
+        )
         for local in locals_in_order:
-            lines.append(f"    {value_type} local_{local} = {initializer};")
+            if "__" in local:
+                # 记录字段由下面的 record_fields 循环声明。
+                continue
+            if local_kinds.get(local) == "text":
+                lines.append(f"    char *local_{local} = NULL;")
+            else:
+                lines.append(
+                    f"    {numeric_local_type} local_{local} = {numeric_local_initializer};"
+                )
         for base, field in record_fields:
-            lines.append(f"    {value_type} local_{base}__{field} = {initializer};")
+            if _record_local_field_is_text(base, field):
+                lines.append(f"    char *local_{base}__{field} = NULL;")
+            else:
+                lines.append(
+                    f"    {numeric_local_type} local_{base}__{field} = {numeric_local_initializer};"
+                )
         lines.extend(
             self._generate_function_body(
                 body,
@@ -5188,6 +6737,7 @@ class CGenerator:
                 call_targets=call_targets,
                 call_extras=call_extras,
                 user_functions=nested_functions,
+                local_kinds=local_kinds,
             )
         )
         if _function_has_return(body):
@@ -5229,6 +6779,7 @@ class CGenerator:
                 **user_functions,
             },
             local_names=capture_names,
+            user_text_functions=self._user_text_functions(),
             bigint_function_suffix=(
                 "_bigint" if bigint_mode and self.program.math_mode != "bigint" else ""
             ),
@@ -5244,6 +6795,31 @@ class CGenerator:
             "}",
             "",
         ]
+
+    def _expression_is_text(self, expression: str) -> bool:
+        """表达式是否产生文本值（用于 print 片段与局部量判断）。"""
+        if _is_plain_string_literal(expression) or _is_string_expression(expression):
+            return True
+        return (
+            _user_text_call_target(
+                expression, self.functions, self._function_returns_text
+            )
+            is not None
+        )
+
+    def _expression_is_array(self, expression: str) -> bool:
+        if _is_array_value_expression(expression, self.expression_array_names):
+            return True
+        transformed, _ = transform_braced_expression(expression)
+        try:
+            body = ast.parse(transformed.strip(), mode="eval").body
+        except SyntaxError:
+            return False
+        return (
+            isinstance(body, ast.Call)
+            and isinstance(body.func, ast.Name)
+            and body.func.id.lower() in self._user_array_functions()
+        )
 
     def _function_expression(
         self,
@@ -5262,6 +6838,13 @@ class CGenerator:
             for function_name, function in self.functions.items()
         }
         functions.update(user_functions or {})
+        array_expression = (
+            value_type == self._array_value_type()
+            and self._expression_is_array(expression)
+        )
+        if value_type == self._array_value_type() and not array_expression:
+            # 记录/数组函数体里的标量字段与局部量按标量渲染。
+            value_type = self._function_value_type()
         rendered = _c_expression(
             expression,
             "context",
@@ -5272,6 +6855,10 @@ class CGenerator:
             complex_mode=not bigint_mode and self.program.math_mode == "complex",
             uint32_mode=not bigint_mode and self.program.math_mode == "uint32",
             user_functions=functions,
+            user_parameter_types=self._user_parameter_type_map(),
+            user_text_functions=self._user_text_functions(),
+            user_array_functions=self._user_array_functions(),
+            array_mode=array_expression,
             local_names=local_names,
             call_targets=call_targets,
             call_extras=call_extras,
@@ -5280,6 +6867,14 @@ class CGenerator:
             ),
         )
         if bigint_mode:
+            return rendered
+        if value_type == self._array_value_type() or value_type.startswith("CosmicRec_"):
+            return rendered
+        if value_type == "char *":
+            # 文本返回值本身已是 char *，不再做数值转换；
+            # 但字符串字面量是静态内存，必须复制成可释放的堆内存。
+            if _is_plain_string_literal(expression):
+                return f"copy_text({rendered})"
             return rendered
         return f"({value_type})({rendered})"
 
@@ -5295,22 +6890,39 @@ class CGenerator:
         call_targets: dict[str, str] | None = None,
         call_extras: dict[str, list[str]] | None = None,
         user_functions: dict[str, int] | None = None,
+        local_kinds: dict[str, str] | None = None,
     ) -> list[str]:
         lines: list[str] = []
+        scalar_value_type = "BigInt" if bigint_mode else self._function_value_type()
+        if local_kinds is None:
+            local_kinds = getattr(self, "_active_local_kinds", {})
         for statement in statements:
             kind = statement.kind
             if kind in {"function_local", "function_set"}:
-                target = local_names[str(statement.data["name"])]
+                target_name = str(statement.data["name"])
+                target = local_names[target_name]
+                statement_value_type = (
+                    "char *"
+                    if local_kinds.get(target_name) == "text"
+                    else scalar_value_type
+                )
                 expression = self._function_expression(
                     str(statement.data["expression"]),
                     statement.line,
                     local_names,
-                    value_type,
+                    statement_value_type,
                     bigint_mode,
                     call_targets=call_targets,
                     call_extras=call_extras,
                     user_functions=user_functions,
                 )
+                if statement_value_type == "char *":
+                    # 文本局部量：先算新值再释放旧值，避免自赋值时读到已释放内存。
+                    lines.append(
+                        f"{indent}{{ char *cosmic_new = {expression}; "
+                        f"free({target}); {target} = cosmic_new; }}"
+                    )
+                    continue
                 lines.append(f"{indent}{target} = {expression};")
                 continue
             if kind == "function_nested":
@@ -5320,40 +6932,92 @@ class CGenerator:
                 for field, expression in zip(
                     statement.data["record_fields"], statement.data["fields"]
                 ):
+                    text_field = _record_local_field_is_text(base, str(field))
                     rendered = self._function_expression(
                         str(expression),
                         statement.line,
                         local_names,
-                        value_type,
+                        "char *" if text_field else value_type,
                         bigint_mode,
                         call_targets=call_targets,
                         call_extras=call_extras,
                         user_functions=user_functions,
                     )
-                    lines.append(f"{indent}local_{base}__{field} = {rendered};")
+                    if text_field:
+                        # 字符串字面量是静态内存，记录字段要拥有自己的副本。
+                        lines.append(
+                            f"{indent}{{ char *cosmic_new = copy_text({rendered}); "
+                            f"free(local_{base}__{field}); "
+                            f"local_{base}__{field} = cosmic_new; }}"
+                        )
+                    else:
+                        lines.append(f"{indent}local_{base}__{field} = {rendered};")
                 continue
-            if kind in {"function_record_copy", "function_record_assign"}:
+            if kind == "function_record_call_local":
                 base = str(statement.data["name"])
-                source = str(statement.data["source"])
-                for field in statement.data["record_fields"]:
-                    lines.append(
-                        f"{indent}local_{base}__{field} = local_{source}__{field};"
-                    )
-                continue
-            if kind == "function_record_set":
-                base = str(statement.data["name"])
-                field = str(statement.data["field"])
+                recorded = str(statement.data["record"])
+                fields = tuple(str(field) for field in statement.data["record_fields"])
+                struct_type = self._record_struct_name(recorded)
                 rendered = self._function_expression(
                     str(statement.data["expression"]),
                     statement.line,
                     local_names,
-                    value_type,
+                    struct_type,
                     bigint_mode,
                     call_targets=call_targets,
                     call_extras=call_extras,
                     user_functions=user_functions,
                 )
-                lines.append(f"{indent}local_{base}__{field} = {rendered};")
+                lines.append(f"{indent}{{ {struct_type} cosmic_record = {rendered};")
+                for field in fields:
+                    target = f"local_{base}__{field}"
+                    if _record_local_field_is_text(base, field):
+                        # struct 里的文本指针移交给记录局部量（不再复制，避免泄漏）。
+                        lines.append(
+                            f"{indent}  {{ char *cosmic_new = copy_text(cosmic_record.{field}); "
+                            f"free({target}); {target} = cosmic_new; }}"
+                        )
+                    else:
+                        lines.append(f"{indent}  {target} = cosmic_record.{field};")
+                lines.append(f"{indent}}}")
+                continue
+            if kind in {"function_record_copy", "function_record_assign"}:
+                base = str(statement.data["name"])
+                source = str(statement.data["source"])
+                for field in statement.data["record_fields"]:
+                    if _record_local_field_is_text(base, str(field)):
+                        lines.append(
+                            f"{indent}{{ char *cosmic_new = copy_text(local_{source}__{field}); "
+                            f"free(local_{base}__{field}); "
+                            f"local_{base}__{field} = cosmic_new; }}"
+                        )
+                    else:
+                        lines.append(
+                            f"{indent}local_{base}__{field} = local_{source}__{field};"
+                        )
+                continue
+            if kind == "function_record_set":
+                base = str(statement.data["name"])
+                field = str(statement.data["field"])
+                text_field = _record_local_field_is_text(base, field)
+                rendered = self._function_expression(
+                    str(statement.data["expression"]),
+                    statement.line,
+                    local_names,
+                    "char *" if text_field else value_type,
+                    bigint_mode,
+                    call_targets=call_targets,
+                    call_extras=call_extras,
+                    user_functions=user_functions,
+                )
+                if text_field:
+                    lines.append(
+                        f"{indent}{{ char *cosmic_new = copy_text({rendered}); "
+                        f"free(local_{base}__{field}); "
+                        f"local_{base}__{field} = cosmic_new; }}"
+                    )
+                else:
+                    lines.append(f"{indent}local_{base}__{field} = {rendered};")
                 continue
             if kind == "function_return":
                 expression = self._function_expression(
@@ -5460,6 +7124,49 @@ class CGenerator:
                     lines.append(f"{indent}    }}")
                     lines.append(f"{indent}}}")
                 continue
+            if kind == "function_print":
+                # 复用 v10 B5 的文本工具拼出整行，再交给 print_value 一次性输出。
+                parts = list(statement.data["parts"])
+                lines.append(f"{indent}{{ char *cosmic_line = copy_text(\"\");")
+                for part in parts:
+                    text_part = self._expression_is_text(str(part)) or (
+                        _is_bare_name(str(part))
+                        and local_kinds.get(_is_bare_name(str(part)) or "") == "text"
+                    )
+                    rendered = self._function_expression(
+                        str(part),
+                        statement.line,
+                        local_names,
+                        "char *" if text_part else value_type,
+                        bigint_mode,
+                        call_targets=call_targets,
+                        call_extras=call_extras,
+                        user_functions=user_functions,
+                    )
+                    if text_part:
+                        # 文本形参是 const char*，而 text_concat 会接管并释放实参，
+                        # 所以裸名字要先复制一份，避免 free 掉调用方的指针。
+                        piece = (
+                            f"copy_text({rendered})"
+                            if _is_bare_name(str(part))
+                            else rendered
+                        )
+                    else:
+                        piece = (
+                            f"cosmic_number_to_text_owned((double)({rendered}), "
+                            f"{statement.line})"
+                        )
+                    lines.append(
+                        f"{indent}  cosmic_line = cosmic_text_concat_owned("
+                        f"cosmic_line, {piece}, {statement.line});"
+                    )
+                encoding = statement.data.get("encoding")
+                encoding_argument = _c_string(str(encoding)) if encoding else "NULL"
+                lines.append(
+                    f"{indent}  print_value(cosmic_line, {encoding_argument}); "
+                    f"free(cosmic_line); }}"
+                )
+                continue
             if kind == "function_break":
                 lines.append(f"{indent}break;")
                 continue
@@ -5549,7 +7256,7 @@ class CGenerator:
             )
         lines.extend(
             [
-                "    Result result = { STATUS_OK, NULL };",
+                "    Result result = { STATUS_OK, RESULT_NONE };",
                 "    int stopped = 0;",
             ]
         )
@@ -5636,7 +7343,7 @@ class CGenerator:
                 "        free_context(context);",
                 "        free(context);",
                 "    }",
-                "    free(result.value);",
+                "    release_result(&result);",
                 "}",
                 "",
             ]
@@ -5647,7 +7354,7 @@ class CGenerator:
         lines = [
             "int main(void) {",
             "    Context *context = &cosmic_main_context;",
-            "    Result result = { STATUS_OK, NULL };",
+            "    Result result = { STATUS_OK, RESULT_NONE };",
             "    for (int i = 0; i < BLOCK_COUNT; ++i) block_status[i] = STATUS_ERROR;",
         ]
         pending_inheritance = False
@@ -5687,7 +7394,7 @@ class CGenerator:
         lines.extend(
             [
                 "    free_context(context);",
-                "    free(result.value);",
+                "    release_result(&result);",
                 "    free_tapes();",
                 '    if (COSMIC_REPORT_HEAP) fprintf(stderr, "memory: peak temporary bytes %zu\\n", cosmic_temp_peak);',
                 "    return 0;",
@@ -5757,6 +7464,9 @@ class CGenerator:
                     function_name: len(tuple(function.data["parameters"]))
                     for function_name, function in self.functions.items()
                 },
+                user_parameter_types=self._user_parameter_type_map(),
+                user_text_functions=self._user_text_functions(),
+                user_array_functions=self._user_array_functions(),
             )
             store_call = (
                 f"cosmic_store_complex_array({context}, {self.array_indices[name]}, {expression}, {line})"
@@ -5778,8 +7488,15 @@ class CGenerator:
             if not isinstance(value_spec, dict) or value_spec.get("kind") != "literal":
                 raise ParseError(line, "var declaration requires a quoted string literal")
             value = str(value_spec.get("value", ""))
+            guard = (
+                []
+                if self._loop_depth > 0
+                else [
+                    f"if ({context}->vars[{index}].initialized) fail_at({line}, \"variable '{name}' is already declared\");"
+                ]
+            )
             return [
-                f"if ({context}->vars[{index}].initialized) fail_at({line}, \"variable '{name}' is already declared\");",
+                *guard,
                 f"set_variable({context}, {index}, {_c_string(value)}, {context}->vars[{index}].encoding, {line});",
                 f"set_result(&{result}, STATUS_OK, {_c_string(value)});",
             ]
@@ -5834,6 +7551,13 @@ class CGenerator:
                     array_variable_indices=self.array_variable_indices,
                     complex_mode=self.program.math_mode == "complex",
                     array_mode=True,
+                    user_functions={
+                        function_name: len(tuple(function.data["parameters"]))
+                        for function_name, function in self.functions.items()
+                    },
+                    user_parameter_types=self._user_parameter_type_map(),
+                    user_text_functions=self._user_text_functions(),
+                    user_array_functions=self._user_array_functions(),
                 )
                 store_function = (
                     "set_complex_array_variable"
@@ -5863,7 +7587,7 @@ class CGenerator:
                             f"get_variable({context}, {self.variable_indices[variable_name]}, {line})"
                         )
                     elif part.get("kind") == "up":
-                        expressions.append(f"copy_text({result}.value)")
+                        expressions.append(f"copy_text({result}.as.text)")
                     else:
                         raise ParseError(line, "unsupported string concatenation part")
                 parts_array = ", ".join(expressions)
@@ -5903,7 +7627,7 @@ class CGenerator:
             ]
         if kind == "start":
             block = self.block_by_statement[id(statement)]
-            if self.uses_atom:
+            if self.uses_atom and str(block.statement.data["name"]) in self.atom_scheduled_blocks:
                 setup = (
                     [
                         f"if (!cosmic_atoms[{block.index}].has_context) {{",
@@ -5931,10 +7655,10 @@ class CGenerator:
                 ]
             return [
                 "{",
-                "    Result child_result = { STATUS_OK, NULL };",
+                "    Result child_result = { STATUS_OK, RESULT_NONE };",
                 f"    {block.c_name}({context}, {1 if inherit else 0}, &child_result);",
                 f"    copy_result(&{result}, &child_result);",
-                "    free(child_result.value);",
+                "    release_result(&child_result);",
                 "}",
             ]
         if kind == "dog":
@@ -5946,7 +7670,7 @@ class CGenerator:
                 if not matching:
                     raise ParseError(line, f"dog refers to unknown execution block '{name}'")
                 atom_index = matching[-1].index
-                if self.uses_atom:
+                if self.uses_atom and name in self.atom_scheduled_blocks:
                     status_expr = f"cosmic_atom_dog({atom_index})"
                 else:
                     status_expr = f"block_status[{atom_index}]"
@@ -5988,6 +7712,60 @@ class CGenerator:
                     line,
                     "array values cannot be used as scalar math_run results; pass the array to an array function",
                 )
+            # 返回数组的用户函数：结果按数组存进 Result。
+            array_call = _user_text_call_target(
+                source_expression, self.functions, self._function_returns_array
+            )
+            if array_call is not None:
+                if self.program.math_mode == "complex":
+                    raise ParseError(
+                        line, "array results are not supported in complex mode"
+                    )
+                rendered = _c_expression(
+                    source_expression,
+                    context,
+                    line,
+                    self.variable_indices,
+                    self.tape_indices,
+                    array_indices=self.array_indices,
+                    array_variable_indices=self.array_variable_indices,
+                    array_mode=True,
+                    user_functions={
+                        function_name: len(tuple(function.data["parameters"]))
+                        for function_name, function in self.functions.items()
+                    },
+                    user_parameter_types=self._user_parameter_type_map(),
+                    user_text_functions=self._user_text_functions(),
+                    user_array_functions=self._user_array_functions(),
+                )
+                return [
+                    f"{{ CosmicArray computed = {rendered};",
+                    f"  set_array_result(&{result}, computed.data, computed.length, STATUS_OK); }}",
+                ]
+            # 返回文本的用户函数：直接把 char * 交给 set_result。
+            text_call = _user_text_call_target(
+                source_expression, self.functions, self._function_returns_text
+            )
+            if text_call is not None:
+                rendered = _c_expression(
+                    source_expression,
+                    context,
+                    line,
+                    self.variable_indices,
+                    self.tape_indices,
+                    array_indices=self.array_indices,
+                    array_variable_indices=self.array_variable_indices,
+                    user_functions={
+                        function_name: len(tuple(function.data["parameters"]))
+                        for function_name, function in self.functions.items()
+                    },
+                    user_parameter_types=self._user_parameter_type_map(),
+                    user_text_functions=self._user_text_functions(),
+                )
+                return [
+                    f"{{ char *computed = {rendered};",
+                    f"  set_result(&{result}, STATUS_OK, computed); free(computed); }}",
+                ]
             if mode == "bigint" and _is_string_expression(source_expression):
                 expression = _c_expression(
                     source_expression,
@@ -6053,6 +7831,9 @@ class CGenerator:
                         name: len(tuple(function.data["parameters"]))
                         for name, function in self.functions.items()
                     },
+                    user_parameter_types=self._user_parameter_type_map(),
+                    user_text_functions=self._user_text_functions(),
+                    user_array_functions=self._user_array_functions(),
                 )
                 return [
                     f"{{ double complex computed = (double complex)({expression}); char number[256];",
@@ -6069,6 +7850,13 @@ class CGenerator:
                     self.tape_indices,
                     array_indices=self.array_indices,
                     array_variable_indices=self.array_variable_indices,
+                    user_functions={
+                        name: len(tuple(function.data["parameters"]))
+                        for name, function in self.functions.items()
+                    },
+                    user_parameter_types=self._user_parameter_type_map(),
+                    user_text_functions=self._user_text_functions(),
+                    user_array_functions=self._user_array_functions(),
                 )
                 return [
                     f"{{ char *computed = {expression};",
@@ -6096,6 +7884,9 @@ class CGenerator:
                         name: len(tuple(function.data["parameters"]))
                         for name, function in self.functions.items()
                     },
+                    user_parameter_types=self._user_parameter_type_map(),
+                    user_text_functions=self._user_text_functions(),
+                    user_array_functions=self._user_array_functions(),
                 )
                 return [
                     f"{{ uint32_t raw = (uint32_t)({expression}); char number[32];",
@@ -6136,6 +7927,9 @@ class CGenerator:
                     name: len(tuple(function.data["parameters"]))
                     for name, function in self.functions.items()
                 },
+                user_parameter_types=self._user_parameter_type_map(),
+                user_text_functions=self._user_text_functions(),
+                user_array_functions=self._user_array_functions(),
             )
             return [
                 f"{{ {expression_type} raw = ({expression_type})({expression}); double computed = (double)raw; char number[128];",
@@ -6165,17 +7959,21 @@ class CGenerator:
                     f"    while ({condition}) {{",
                     f"        if (_iterations++ >= {self.max_loop_iterations}ULL) fail_at({line}, \"loop iteration limit exceeded\");",
                 ]
-            for child in statement.body:
-                lines.extend(
-                    ("    " if self.max_loop_iterations is None else "        ") + generated
-                    for generated in self._generate_statement(
-                        child,
-                        context=context,
-                        result=result,
-                        block_mode=block_mode,
-                        inherit=False,
+            self._loop_depth += 1
+            try:
+                for child in statement.body:
+                    lines.extend(
+                        ("    " if self.max_loop_iterations is None else "        ") + generated
+                        for generated in self._generate_statement(
+                            child,
+                            context=context,
+                            result=result,
+                            block_mode=block_mode,
+                            inherit=False,
+                        )
                     )
-                )
+            finally:
+                self._loop_depth -= 1
             if self.max_loop_iterations is None:
                 lines.append("}")
             else:
@@ -6299,7 +8097,7 @@ class CGenerator:
             label = "HOP step %d failed" % step if step else "previous step failed"
             return [
                 f"if ({result}.status == STATUS_ERROR) fail_at({line}, \"{label}: previous step reported error\");",
-                f"set_result(&{result}, STATUS_OK, {result}.value);",
+                f"set_result(&{result}, STATUS_OK, {result}.as.text);",
             ]
         if kind == "exit":
             return [
@@ -6468,7 +8266,7 @@ class CGenerator:
         if spec.get("kind") == "literal":
             return _c_string(str(spec.get("value", "")))
         if spec.get("kind") == "up":
-            return f"{result}.value"
+            return f"{result}.as.text"
         raise ParseError(line, "unsupported assignment value")
 
     def _atom_index(self, name: str, line: int) -> int:
@@ -6799,9 +8597,9 @@ class CGenerator:
             ]
         if isinstance(value_spec, dict) and value_spec.get("kind") == "up":
             return [
-                f"if (!{result}.value) fail_at({line}, \"up has no value\");",
-                f"print_value({result}.value, {_c_string(str(encoding)) if encoding else 'NULL'});",
-                f"set_result(&{result}, STATUS_OK, {result}.value);",
+                f"if (!{result}.as.text) fail_at({line}, \"up has no value\");",
+                f"print_value({result}.as.text, {_c_string(str(encoding)) if encoding else 'NULL'});",
+                f"set_result(&{result}, STATUS_OK, {result}.as.text);",
             ]
         if isinstance(value_spec, dict) and value_spec.get("kind") == "concat":
             parts = value_spec.get("parts")
@@ -6821,7 +8619,7 @@ class CGenerator:
                         f"get_variable({context}, {self.variable_indices[variable_name]}, {line})"
                     )
                 elif part.get("kind") == "up":
-                    expressions.append(f"copy_text({result}.value)")
+                    expressions.append(f"copy_text({result}.as.text)")
                 else:
                     raise ParseError(line, "unsupported string concatenation part")
             parts_array = ", ".join(expressions)
@@ -6861,7 +8659,7 @@ class CGenerator:
         if selector == "status":
             actual = f"({result}.status == STATUS_OK ? \"ok\" : {result}.status == STATUS_STOP ? \"stop\" : \"error\")"
         elif selector == "*":
-            actual = f"{result}.value"
+            actual = f"{result}.as.text"
         else:
             index = self.variable_indices[selector]
             actual = None

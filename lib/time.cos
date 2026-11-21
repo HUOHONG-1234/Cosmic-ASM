@@ -1,0 +1,26 @@
+#% lib/time.cos —— 时间单位换算（纯数值）
+#%
+#% 本文件不保存状态：要取当前时间，直接调用内置 now_ms()。
+#% 所有函数只做数值换算，解释器与 C 后端输出一致。
+#%
+#% 用法：
+#%
+#%     #%include = "lib/time.cos"
+#%     math_run ms_to_seconds(1500) = ? -int64      # 1.5
+#%     math_run seconds_to_ms(1.5) = ? -int64       # 1500
+#%     math_run elapsed_ms(now_ms(), now_ms()) = ? -int64
+
+#% 毫秒转秒
+function ms_to_seconds(ms) = ms / 1000
+
+#% 秒转毫秒
+function seconds_to_ms(seconds) = seconds * 1000
+
+#% 两个时间戳之间的毫秒差
+function elapsed_ms(start_ms, end_ms) = end_ms - start_ms
+
+#% 两个时间戳之间的秒差
+function elapsed_seconds(start_ms, end_ms) = (end_ms - start_ms) / 1000
+
+#% 毫秒转分钟（浮点）
+function ms_to_minutes(ms) = ms / 60000

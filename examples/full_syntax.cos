@@ -1,0 +1,769 @@
+#% ============================================================
+#% Cosmic ASM 全语法示例（v1 → v10）
+#%
+#% 这个文件把当前语言支持的全部语法各演示一遍，解释器与 GCC 编译版输出一致：
+#%     python -m cosmic_interpreter.cosmic_cli run   examples/full_syntax.cos
+#%     python -m cosmic_interpreter.cosmic_cli build examples/full_syntax.cos -o full_syntax
+#%
+#% 有三类语法无法塞进同一个可运行文件，写在 examples/full_syntax_platform.cos 与
+#% 本文件末尾的注释里：#dll（仅 Windows + 需要链接系统库）、#%asm（仅编译版）、
+#% 以及 #%target / #%features / #%memory 这类「整个程序只能选一个值」的声明。
+#% ============================================================
+
+#% 导入组件：execute 提供执行块与 bash，math 提供 math_run（v1 起）
+#execute
+#math
+
+#% 全局数值模式，每个程序只能声明一次；单条 math_run 可用 -模式 覆盖
+#%math = float64
+#% 输出有效数字（1..17，默认 15），只影响显示
+#%precision = 12
+
+#% 指定某个变量永远以 GBK 存储（v1 起）
+#hello = GBK
+
+#% ------------------------------------------------------------
+#% 1. 变量、字符串拼接与打印
+#% var name = {"初始文本"} 显式声明并初始化字符串变量
+#% {"text"} 是字符串字面量（支持 \n \" 转义）；{name} 才是变量引用
+#% push ({name} = ...) 未声明时自动创建；push 里用 (and) 连接片段
+#% print (<...>) 输出；-GBK 指定该行的输出编码
+#% ------------------------------------------------------------
+var greeting = {"hello"}
+push ({who} = {"cosmic"})
+push ({banner} = {greeting} (and) {" "} (and) {who})
+print (<{banner}>)
+push ({quoted} = {"say \"hi\"\nsecond line"})
+print (<{quoted}>)
+print (<{"literal {braces} stay literal"}>)
+
+#% 编码：变量声明为 GBK 后，print 用 -GBK 把它按 GBK 输出
+push ({legacy} = {"gbk-text"})
+print (<{legacy}>) -GBK
+
+#% kill{变量} -force 覆盖并释放该变量的本地存储（内存卫生，不是安全加固）
+push ({victim} = {"secret"})
+kill{victim} -force
+
+#% 打印未定义/已 kill 的变量：静默失败，状态置为 error，并计入 err_count()
+print (<{victim}>)
+print (<{never_defined}>)
+math_run err_count() = ? -int64
+if up = (ok) goto (push ({errors} = {(in = up)}))
+print (<{"err_count = "} (and) {errors}>)
+
+#% ------------------------------------------------------------
+#% 2. 数值：math_run 与各模式覆盖
+#% math_run 表达式 = ? 把结果写进「上一行状态」，再用 if up = (ok) 取出来
+#% 模式覆盖：-int32 -int64 -uint32 -float64 -complex -bigint
+#% 科学函数：abs sqrt sin cos tan asin acos atan atan2 sinh cosh tanh exp
+#%          log log10 log2 floor ceil pow fmod hypot erf erfc gamma lgamma beta zeta
+#% 常数：pi e tau；三角函数用弧度
+#% 每条 print 的片段都要写成 {"字面量"} 或 {变量}，中间用 (and) 连接
+#% ------------------------------------------------------------
+math_run sin(pi / 2) + sqrt(9) = ? -float64
+if up = (ok) goto (push ({science} = {(in = up)}))
+print (<{"sin(pi/2)+sqrt(9) = "} (and) {science}>)
+
+math_run 16 * atan(1 / 5) - 4 * atan(1 / 239) = ? -float64
+if up = (ok) goto (push ({machin} = {(in = up)}))
+print (<{"machin formula = "} (and) {machin}>)
+
+math_run hypot(3, 4) = ? -float64
+if up = (ok) goto (push ({hyp} = {(in = up)}))
+math_run fmod(7, 3) = ? -float64
+if up = (ok) goto (push ({rem} = {(in = up)}))
+math_run pow(2, 10) = ? -float64
+if up = (ok) goto (push ({pw} = {(in = up)}))
+print (<{"hypot="} (and) {hyp} (and) {" fmod="} (and) {rem} (and) {" pow="} (and) {pw}>)
+
+math_run gamma(5) = ? -float64
+if up = (ok) goto (push ({gam} = {(in = up)}))
+math_run lgamma(5) = ? -float64
+if up = (ok) goto (push ({lgam} = {(in = up)}))
+math_run erfc(0) = ? -float64
+if up = (ok) goto (push ({erfc0} = {(in = up)}))
+math_run beta(2, 3) = ? -float64
+if up = (ok) goto (push ({b23} = {(in = up)}))
+math_run zeta(2) = ? -float64
+if up = (ok) goto (push ({z2} = {(in = up)}))
+print (<{"gamma(5)="} (and) {gam} (and) {" lgamma(5)="} (and) {lgam}>)
+print (<{"erfc(0)="} (and) {erfc0} (and) {" beta(2,3)="} (and) {b23}>)
+print (<{"zeta(2)="} (and) {z2}>)
+
+#% int32 / int64：结果必须是整数且在范围内，否则报错
+math_run 7 // 2 = ? -int32
+if up = (ok) goto (push ({idiv} = {(in = up)}))
+math_run 7 % 2 = ? -int32
+if up = (ok) goto (push ({imod} = {(in = up)}))
+math_run 2 ** 62 = ? -int64
+if up = (ok) goto (push ({big_pow} = {(in = up)}))
+print (<{"7//2="} (and) {idiv} (and) {" 7%2="} (and) {imod} (and) {" 2^62="} (and) {big_pow}>)
+
+#% 位运算只能在整数模式下使用
+math_run 12 & 10 = ? -int64
+if up = (ok) goto (push ({band} = {(in = up)}))
+math_run 12 | 10 = ? -int64
+if up = (ok) goto (push ({bor} = {(in = up)}))
+math_run 12 ^ 10 = ? -int64
+if up = (ok) goto (push ({bxor} = {(in = up)}))
+math_run 1 << 10 = ? -int64
+if up = (ok) goto (push ({shl} = {(in = up)}))
+math_run ~5 = ? -int64
+if up = (ok) goto (push ({inv} = {(in = up)}))
+print (<{"12&10="} (and) {band} (and) {" 12|10="} (and) {bor} (and) {" 12^10="} (and) {bxor}>)
+print (<{"1<<10="} (and) {shl} (and) {" ~5="} (and) {inv}>)
+
+#% uint32：结果按 2^32 回绕，>> 恒为逻辑右移
+math_run 4294967295 + 2 = ? -uint32
+if up = (ok) goto (push ({wrap} = {(in = up)}))
+math_run 4294967295 >> 1 = ? -uint32
+if up = (ok) goto (push ({lshr} = {(in = up)}))
+print (<{"uint32 wrap="} (and) {wrap} (and) {" logical-shift="} (and) {lshr}>)
+
+#% bigint：任意精度整数（上限 1,000,000 位）
+math_run 2 ** 100 = ? -bigint
+if up = (ok) goto (push ({huge} = {(in = up)}))
+print (<{"2^100="} (and) {huge}>)
+
+#% complex：double 精度复数；实部+虚部i 输出
+math_run complex(1, 2) * complex(3, 4) = ? -complex
+if up = (ok) goto (push ({prod} = {(in = up)}))
+math_run real({prod}) = ? -complex
+if up = (ok) goto (push ({pre} = {(in = up)}))
+math_run imag({prod}) = ? -complex
+if up = (ok) goto (push ({pim} = {(in = up)}))
+math_run cabs(complex(3, 4)) = ? -float64
+if up = (ok) goto (push ({modulus} = {(in = up)}))
+math_run conj(complex(1, 2)) = ? -complex
+if up = (ok) goto (push ({conj1} = {(in = up)}))
+print (<{"(1+2i)(3+4i)="} (and) {prod} (and) {" real="} (and) {pre} (and) {" imag="} (and) {pim}>)
+print (<{"cabs(3+4i)="} (and) {modulus} (and) {" conj(1+2i)="} (and) {conj1}>)
+
+#% hex/unhex：十六进制文本与数值互转（unhex 建议配 bigint）
+math_run hex(255, 4) = ? -int64
+if up = (ok) goto (push ({hexed} = {(in = up)}))
+print (<{"hex(255,4)="} (and) {hexed}>)
+math_run unhex({"ff"}) = ? -bigint
+if up = (ok) goto (push ({unhexed} = {(in = up)}))
+print (<{"unhex(ff)="} (and) {unhexed}>)
+
+#% 定点常数：小数点后 n 位的缩放整数，以及格式化好的十进制文本
+math_run pi_digits(10) = ? -bigint
+if up = (ok) goto (push ({pi_scaled} = {(in = up)}))
+math_run pi_str(20) = ? -bigint
+if up = (ok) goto (push ({pi_text} = {(in = up)}))
+math_run e_str(10) = ? -bigint
+if up = (ok) goto (push ({e_text} = {(in = up)}))
+math_run sqrt2_str(10) = ? -bigint
+if up = (ok) goto (push ({sqrt2_text} = {(in = up)}))
+math_run e_digits(5) = ? -bigint
+if up = (ok) goto (push ({e_scaled} = {(in = up)}))
+math_run sqrt2_digits(5) = ? -bigint
+if up = (ok) goto (push ({sqrt2_scaled} = {(in = up)}))
+print (<{"pi_digits(10)="} (and) {pi_scaled}>)
+print (<{"pi_str(20)="} (and) {pi_text}>)
+print (<{"e_str(10)="} (and) {e_text} (and) {" sqrt2_str(10)="} (and) {sqrt2_text}>)
+print (<{"e_digits(5)="} (and) {e_scaled} (and) {" sqrt2_digits(5)="} (and) {sqrt2_scaled}>)
+
+#% rag (max : 上界) (min : 下界)：闭区间整数（模拟用，不是密码学随机数）
+#% 这里把上下界都设成 1，让示例输出可复现；写 rag (max : 6) (min : 1) 就是掷骰子
+math_run rag (max : 1) (min : 1) = ? -int32
+if up = (ok) goto (push ({dice} = {(in = up)}))
+print (<{"rag(1..1) = "} (and) {dice}>)
+
+#% Unicode：chr(码点) / ord(字符)；strlen 按码点计数，char_at 取下标字符
+push ({ch} = {"你"})
+math_run ord({ch}) = ? -int32
+if up = (ok) goto (push ({code} = {(in = up)}))
+print (<{"ord(\u4f60)="} (and) {code}>)
+math_run chr({code}) = ?
+if up = (ok) goto (push ({back} = {(in = up)}))
+print (<{"chr back = "} (and) {back}>)
+math_run strlen({ch}) = ? -int64
+if up = (ok) goto (push ({len1} = {(in = up)}))
+math_run char_at({"abc"}, 1) = ?
+if up = (ok) goto (push ({at1} = {(in = up)}))
+print (<{"strlen="} (and) {len1} (and) {" char_at(abc,1)="} (and) {at1}>)
+
+#% ------------------------------------------------------------
+#% 3. 数组、字节数组、矩阵与统计
+#% array name = [..] 声明具名数组（索引从 0 开始，跨 math_run 保留）
+#% array_set/array_push 原地改具名数组；列表字面量则产生临时数组
+#% bytes name = [..] 声明字节数组，元素必须 0..255
+#% 矩阵写作嵌套列表，形状随值保存；矩阵值不能 print，必须交给矩阵函数
+#% ------------------------------------------------------------
+array scores = [1, 2, 3]
+math_run array_len(scores) = ? -int64
+if up = (ok) goto (push ({n_scores} = {(in = up)}))
+math_run array_sum(scores) = ? -int64
+if up = (ok) goto (push ({sum_scores} = {(in = up)}))
+math_run array_at(scores, 1) = ? -int64
+if up = (ok) goto (push ({second} = {(in = up)}))
+print (<{"len="} (and) {n_scores} (and) {" sum="} (and) {sum_scores} (and) {" at(1)="} (and) {second}>)
+
+math_run array_sum(array_push(scores, 4)) = ? -int64
+if up = (ok) goto (push ({pushed} = {(in = up)}))
+math_run array_sum(array_set(scores, 0, 10)) = ? -int64
+if up = (ok) goto (push ({setted} = {(in = up)}))
+print (<{"after push="} (and) {pushed} (and) {" after set="} (and) {setted}>)
+
+array unsorted = [5, 1, 9, 3]
+array ordered = sort_array(unsorted)
+array reversed_arr = reverse_array(unsorted)
+math_run array_at(ordered, 0) = ? -int64
+if up = (ok) goto (push ({smallest} = {(in = up)}))
+math_run array_at(reversed_arr, 0) = ? -int64
+if up = (ok) goto (push ({last_one} = {(in = up)}))
+math_run array_index_of(unsorted, 9) = ? -int64
+if up = (ok) goto (push ({found_at} = {(in = up)}))
+print (<{"sorted[0]="} (and) {smallest} (and) {" reversed[0]="} (and) {last_one} (and) {" index_of(9)="} (and) {found_at}>)
+
+#% 统计与积分：返回小数，用 -float64
+math_run dot([1, 2, 3], [4, 5, 6]) = ? -float64
+if up = (ok) goto (push ({dp} = {(in = up)}))
+math_run mean([1, 2, 3, 4]) = ? -float64
+if up = (ok) goto (push ({avg} = {(in = up)}))
+math_run std([1, 2, 3, 4]) = ? -float64
+if up = (ok) goto (push ({spread} = {(in = up)}))
+math_run min([4, 1, 3]) = ? -float64
+if up = (ok) goto (push ({lo} = {(in = up)}))
+math_run max([4, 1, 3]) = ? -float64
+if up = (ok) goto (push ({hi} = {(in = up)}))
+print (<{"dot="} (and) {dp} (and) {" mean="} (and) {avg} (and) {" std="} (and) {spread}>)
+print (<{"min="} (and) {lo} (and) {" max="} (and) {hi}>)
+
+math_run median([4, 1, 3, 2]) = ? -float64
+if up = (ok) goto (push ({med} = {(in = up)}))
+math_run variance([1, 2, 3, 4]) = ? -float64
+if up = (ok) goto (push ({var4} = {(in = up)}))
+math_run correlation([1, 2, 3], [2, 4, 6]) = ? -float64
+if up = (ok) goto (push ({corr} = {(in = up)}))
+math_run percentile([1, 2, 3, 4], 25) = ? -float64
+if up = (ok) goto (push ({pct} = {(in = up)}))
+print (<{"median="} (and) {med} (and) {" variance="} (and) {var4}>)
+print (<{"correlation="} (and) {corr} (and) {" percentile(25)="} (and) {pct}>)
+
+#% 积分：samples 是等距样本，h 是步长；辛普森法要求奇数个样本
+array square_samples = [0, 1, 4, 9, 16]
+math_run trapz(square_samples, 1) = ? -float64
+if up = (ok) goto (push ({trapz_area} = {(in = up)}))
+math_run simpson(square_samples, 1) = ? -float64
+if up = (ok) goto (push ({simpson_area} = {(in = up)}))
+print (<{"trapz="} (and) {trapz_area} (and) {" simpson="} (and) {simpson_area}>)
+
+#% 字节数组：元素 0..255，按名原地读写
+bytes tag = [67, 79, 83, 77, 73, 67]
+bytes_set(tag, 0, 99)
+math_run bytes_len(tag) = ? -int64
+if up = (ok) goto (push ({tag_len} = {(in = up)}))
+math_run bytes_get(tag, 0) = ? -int64
+if up = (ok) goto (push ({tag_first} = {(in = up)}))
+print (<{"bytes_len="} (and) {tag_len} (and) {" bytes_get(0)="} (and) {tag_first}>)
+
+#% bytes_from_str / str_from_bytes：文本与字节数组互转
+array blob = bytes_from_str("COSMIC")
+math_run bytes_len(blob) = ? -int64
+if up = (ok) goto (push ({blob_len} = {(in = up)}))
+math_run strlen(str_from_bytes(blob)) = ? -int64
+if up = (ok) goto (push ({blob_back} = {(in = up)}))
+print (<{"bytes_from_str(\"COSMIC\") len="} (and) {blob_len} (and) {" back len="} (and) {blob_back}>)
+
+#% 矩阵：NxM 形状随值保存
+array matrix_a = [[1, 2, 3], [4, 5, 6]]
+math_run matrix_rows(matrix_a) = ? -int64
+if up = (ok) goto (push ({m_rows} = {(in = up)}))
+math_run matrix_cols(matrix_a) = ? -int64
+if up = (ok) goto (push ({m_cols} = {(in = up)}))
+math_run matrix_at(matrix_a, 1, 2) = ? -int64
+if up = (ok) goto (push ({m_at} = {(in = up)}))
+print (<{"matrix rows="} (and) {m_rows} (and) {" cols="} (and) {m_cols} (and) {" at(1,2)="} (and) {m_at}>)
+
+push ({flipped} = matrix_transpose(matrix_a))
+math_run matrix_rows({flipped}) = ? -int64
+if up = (ok) goto (push ({flip_rows} = {(in = up)}))
+math_run matrix_cols({flipped}) = ? -int64
+if up = (ok) goto (push ({flip_cols} = {(in = up)}))
+print (<{"transposed rows="} (and) {flip_rows} (and) {" cols="} (and) {flip_cols}>)
+
+push ({product} = matrix_mul([[1, 2], [3, 4]], [[5, 6], [7, 8]]))
+math_run matrix_at({product}, 0, 0) = ? -int64
+if up = (ok) goto (push ({prod00} = {(in = up)}))
+math_run matrix_at({product}, 1, 1) = ? -int64
+if up = (ok) goto (push ({prod11} = {(in = up)}))
+print (<{"A*B (0,0)="} (and) {prod00} (and) {" (1,1)="} (and) {prod11}>)
+
+#% 2x2 / 3x3 逆矩阵与 2x2 行列式的便捷函数
+push ({inv2} = matrix2_inverse([[4, 7], [2, 6]]))
+math_run matrix_at({inv2}, 0, 0) = ? -float64
+if up = (ok) goto (push ({inv2_00} = {(in = up)}))
+math_run matrix2_det([[1, 2], [3, 4]]) = ? -float64
+if up = (ok) goto (push ({det2} = {(in = up)}))
+math_run matrix2_mul_entry([[1, 2], [3, 4]], [[5, 6], [7, 8]], 1, 0) = ? -int64
+if up = (ok) goto (push ({entry10} = {(in = up)}))
+print (<{"inverse (0,0)="} (and) {inv2_00} (and) {" det="} (and) {det2}>)
+print (<{"2x2 mul entry (1,0)="} (and) {entry10}>)
+
+push ({inv3} = matrix3_inverse([[1, 0, 0], [0, 1, 0], [0, 0, 1]]))
+math_run matrix_at({inv3}, 2, 2) = ? -float64
+if up = (ok) goto (push ({inv3_22} = {(in = up)}))
+print (<{"3x3 identity inverse (2,2)="} (and) {inv3_22}>)
+
+#% solve_linear(A, b) 解 Ax=b，返回普通数组
+push ({solution} = solve_linear([[1, 1], [2, 3]], [3, 8]))
+math_run array_at({solution}, 0) = ? -float64
+if up = (ok) goto (push ({sol_x} = {(in = up)}))
+math_run array_at({solution}, 1) = ? -float64
+if up = (ok) goto (push ({sol_y} = {(in = up)}))
+print (<{"x="} (and) {sol_x} (and) {" y="} (and) {sol_y}>)
+
+#% ------------------------------------------------------------
+#% 4. 函数：四种写法
+#%   function f(a, b) = 表达式                单表达式（可递归）
+#%   function f(a, b) { let/set/if/while/... } 语句体
+#%   function f(a) = ... 写在函数体内          嵌套函数（按值捕获外层）
+#%   generic function f(a, b) = 表达式         泛型（按实参类型工作）
+#% choose(条件, 真值, 假值) 惰性选择分支
+#% ------------------------------------------------------------
+#% 名字用 fact_rec，避免和后面 #%include 进来的 lib/math.cos 里的 factorial 冲突
+function fact_rec(n) = choose(n <= 1, 1, n * fact_rec(n - 1))
+math_run fact_rec(10) = ? -int64
+if up = (ok) goto (push ({fact10} = {(in = up)}))
+print (<{"fact_rec(10)="} (and) {fact10}>)
+
+generic function combine(a, b) = a + b
+math_run combine(2, 3) = ? -int64
+if up = (ok) goto (push ({gint} = {(in = up)}))
+print (<{"generic int 2+3="} (and) {gint}>)
+
+#% 语句体：let 声明局部量、set 赋值、if/else、while、break、continue、return
+function sum_odds(limit)
+{
+    let total = 0
+    let i = 0
+    while (i < limit)
+    {
+        set i = i + 1
+        if (i % 2 == 0)
+        {
+            continue
+        }
+        if (i > limit - 1)
+        {
+            break
+        }
+        set total = total + i
+    }
+    return total
+}
+math_run sum_odds(10) = ? -int64
+if up = (ok) goto (push ({odds} = {(in = up)}))
+print (<{"sum_odds(10)="} (and) {odds}>)
+
+#% 函数体内的 if 要求 else 分支存在，且两个分支都以 return 结束
+function pick_label(score)
+{
+    if (score >= 90)
+    {
+        return 3
+    }
+    else
+    {
+        if (score >= 60)
+        {
+            return 2
+        }
+        else
+        {
+            return 1
+        }
+    }
+}
+math_run pick_label(75) = ? -int64
+if up = (ok) goto (push ({label75} = {(in = up)}))
+math_run pick_label(95) = ? -int64
+if up = (ok) goto (push ({label95} = {(in = up)}))
+print (<{"label(75)="} (and) {label75} (and) {" label(95)="} (and) {label95}>)
+
+#% 嵌套函数：按值捕获外层参数与局部量（改动外层不影响已捕获的副本）
+function closure_demo(seed)
+{
+    let factor = 2
+    function apply(value) = value * factor + seed
+    let first = apply(3)
+    set factor = 10
+    let second = apply(3)
+    return first * 100 + second
+}
+math_run closure_demo(5) = ? -int64
+if up = (ok) goto (push ({captured} = {(in = up)}))
+print (<{"closure first*100+second="} (and) {captured}>)
+
+#% ------------------------------------------------------------
+#% 5. 文本参数与文本返回（v9）
+#% function greet(name : text) -> text = upper(name)   显式标注
+#% function shout(word) = upper(word)                   不标注时按用法推断
+#% 花括号写法 {name} 与裸名等价
+#% ------------------------------------------------------------
+function greet(name : text) -> text = upper(name)
+function shout(word) = upper(word)
+function greet_braced(name : text) -> text = upper({name})
+math_run greet("cosmic") = ?
+if up = (ok) goto (push ({g1} = {(in = up)}))
+math_run shout("loud") = ?
+if up = (ok) goto (push ({g2} = {(in = up)}))
+math_run greet_braced("braces") = ?
+if up = (ok) goto (push ({g3} = {(in = up)}))
+print (<{g1} (and) {" "} (and) {g2} (and) {" "} (and) {g3}>)
+
+function measure(text_value : text) = strlen(text_value)
+math_run measure("abcd") = ? -int64
+if up = (ok) goto (push ({measured} = {(in = up)}))
+print (<{"measure(\"abcd\")="} (and) {measured}>)
+
+#% v10 文本拼接内置：text_concat / to_text / text_join
+function build_list(times) -> text
+{
+    let acc = ""
+    let i = 1
+    while (i <= times)
+    {
+        let piece = text_concat("item", to_text(i))
+        if (i > 1)
+        {
+            set acc = text_concat(acc, ",")
+        }
+        set acc = text_concat(acc, piece)
+        set i = i + 1
+    }
+    return acc
+}
+math_run build_list(3) = ?
+if up = (ok) goto (push ({listing} = {(in = up)}))
+print (<{"build_list(3)="} (and) {listing}>)
+
+math_run text_join([10, 20, 30], " / ") = ?
+if up = (ok) goto (push ({joined} = {(in = up)}))
+print (<{"text_join="} (and) {joined}>)
+
+#% ------------------------------------------------------------
+#% 6. 数组参数与数组返回（v9）
+#% ------------------------------------------------------------
+function total(values : array) = array_sum(values)
+function build_array(size) = array_fill(size, 7)
+math_run total([1, 2, 3, 4]) = ? -int64
+if up = (ok) goto (push ({arr_total} = {(in = up)}))
+math_run array_sum(build_array(3)) = ? -int64
+if up = (ok) goto (push ({built_total} = {(in = up)}))
+print (<{"total([1..4])="} (and) {arr_total} (and) {" sum(build(3))="} (and) {built_total}>)
+
+#% ------------------------------------------------------------
+#% 7. 记录（v7 引入，v9 起是一等值，v10 起字段可以是文本）
+#% record Name { 字段, 字段 : text }
+#% operator + Name = { 表达式, ... }  仅 + - * /，解析期静态展开
+#% 记录可作参数、作返回值、在函数之间传递；字段读写用 name.field
+#% ------------------------------------------------------------
+record Point { x, y }
+operator + Point = { left.x + right.x, left.y + right.y }
+operator - Point = { left.x - right.x, left.y - right.y }
+
+function add_points(a : Point, b : Point) -> Point = a + b
+function point_norm(p : Point) = p.x * p.x + p.y * p.y
+
+function record_demo()
+{
+    let base = Point(1, 2)
+    let delta = Point(10, 20)
+    let sum = base + delta
+    let diff = delta - base
+    let copy = sum
+    set copy.x = 100
+    return sum.x * 1000 + copy.x * 100 + diff.y
+}
+math_run record_demo() = ? -int64
+if up = (ok) goto (push ({rec_demo} = {(in = up)}))
+#% 记录也能直接作实参传入（Point(...) 就是构造表达式）
+math_run point_norm(Point(3, 4)) = ? -int64
+if up = (ok) goto (push ({rec_norm} = {(in = up)}))
+function record_pair_demo()
+{
+    let a = Point(1, 2)
+    let b = add_points(a, Point(10, 20))
+    return b.x + b.y
+}
+math_run record_pair_demo() = ? -int64
+if up = (ok) goto (push ({rec_pair} = {(in = up)}))
+print (<{"record_demo="} (and) {rec_demo} (and) {" norm(3,4)="} (and) {rec_norm}>)
+print (<{"add_points total="} (and) {rec_pair}>)
+
+#% 文本字段：记录因此能装标识符、字面量这类内容（AST 节点就需要）
+record Token { kind : text, text : text, line }
+function token_label(t : Token) -> text
+{
+    return text_concat(text_concat(text_concat(t.kind, ":"), text_concat(t.text, "@")), to_text(t.line))
+}
+function token_demo() -> text
+{
+    let t = Token("let", "x", 3)
+    let copy = t
+    set copy.text = "y"
+    return text_concat(token_label(t), text_concat(" / ", token_label(copy)))
+}
+math_run token_label(Token("num", "42", 7)) = ?
+if up = (ok) goto (push ({tok1} = {(in = up)}))
+math_run token_demo() = ?
+if up = (ok) goto (push ({tok2} = {(in = up)}))
+print (<{"token="} (and) {tok1}>)
+print (<{"copy="} (and) {tok2}>)
+
+#% ------------------------------------------------------------
+#% 8. v10：函数体内 print、循环体内 var
+#% 函数内 print 的文本形参需要标注 : text（print 不参与类型推断）
+#% 循环体里的 var 每轮都是新绑定；顶层重复声明仍报错
+#% ------------------------------------------------------------
+function report(name : text, score)
+{
+    print (<{"  [report] "} (and) {name} (and) {" = "} (and) {score}>)
+    return score
+}
+math_run report("ann", 95) = ? -int64
+if up = (ok) goto (push ({reported} = {(in = up)}))
+print (<{"report returned "} (and) {reported}>)
+
+function loop_with_locals(times) -> text
+{
+    let acc = ""
+    let i = 0
+    while (i < times)
+    {
+        let stamp = text_concat("v", to_text(i))
+        set acc = text_concat(acc, stamp)
+        set i = i + 1
+    }
+    return acc
+}
+math_run loop_with_locals(3) = ?
+if up = (ok) goto (push ({locals_out} = {(in = up)}))
+print (<{"loop locals="} (and) {locals_out}>)
+
+#% ------------------------------------------------------------
+#% 9. 命名空间与别名
+#% #%namespace = 名称 只作用于其后的函数；#%namespace = global 回到全局
+#% 带命名空间的函数内部名是 名称__函数，调用要写 名称::函数(...) 或用 #%use 起别名
+#% ------------------------------------------------------------
+#%namespace = geometry
+function area(w, h) = w * h
+#%namespace = global
+#%use = geometry.area as rect_area
+
+math_run rect_area(3, 4) = ? -int64
+if up = (ok) goto (push ({alias_area} = {(in = up)}))
+math_run geometry::area(5, 6) = ? -int64
+if up = (ok) goto (push ({qualified_area} = {(in = up)}))
+print (<{"alias="} (and) {alias_area} (and) {" qualified="} (and) {qualified_area}>)
+
+#% ------------------------------------------------------------
+#% 10. 顶层错误处理：try / catch / finally（至少要有 catch 或 finally）
+#% catch 接住「语言状态机层面」的错误；硬失败（除零、越界）不会被接住
+#% ------------------------------------------------------------
+try
+{
+    push ({risky} = {"attempted"})
+}
+catch
+{
+    push ({risky} = {"caught"})
+}
+finally
+{
+    push ({cleanup} = {"done"})
+}
+print (<{"try="} (and) {risky} (and) {" finally="} (and) {cleanup}>)
+
+#% ------------------------------------------------------------
+#% 11. 图灵机磁带：tape_create / tape_write / tape_read / tape_move
+#% 磁带按需扩展，单元符号是 0..255
+#% ------------------------------------------------------------
+tape_create (work)
+tape_write (work) = {3}
+tape_move (work) = (right)
+tape_write (work) = {7}
+tape_move (work) = (left)
+tape_read (work) = ?
+if up {*} = (3) goto (push ({tape_first} = {"3"}))
+print (<{"tape first cell = "} (and) {tape_first}>)
+
+#% ------------------------------------------------------------
+#% 12. 内存回收控制（编译版生效；解释器同样记录状态）
+#% gc_pin 固定缓冲；The_world (stop|force|start) 暂停 / 立即释放 / 恢复
+#% ------------------------------------------------------------
+array pinned_data = [1, 2, 3]
+gc_pin ({pinned_data})
+The_world (stop)
+The_world (force)
+The_world (start)
+gc_unpin ({pinned_data})
+math_run array_sum(pinned_data) = ? -int64
+if up = (ok) goto (push ({pinned_sum} = {(in = up)}))
+print (<{"pinned sum="} (and) {pinned_sum}>)
+
+#% ------------------------------------------------------------
+#% 13. HOP 动词层（v8）：动词在前、宾语在后，用 存 接目标
+#% 中文动词与英文动词等价：to / into 可以代替 存
+#% 连续两句 HOP 之间自动插入 require_ok；也可以手写 require_ok [步骤号]
+#% ------------------------------------------------------------
+push ({sample} = {"alpha beta gamma"})
+文本长度 {sample} 存 样本长度
+转大写 {sample} 存 样本大写
+行数 {sample} 存 样本行数
+print (<{"HOP 文本长度 = "} (and) {样本长度}>)
+print (<{"HOP 转大写 = "} (and) {样本大写}>)
+print (<{"HOP 行数 = "} (and) {样本行数}>)
+
+text_length {sample} to 英文长度
+upper_text {sample} to 英文大写
+find_index {sample} "beta" to 英文位置
+print (<{"HOP text_length = "} (and) {英文长度}>)
+print (<{"HOP upper_text = "} (and) {英文大写}>)
+print (<{"HOP find_index(beta) = "} (and) {英文位置}>)
+
+array hop_numbers = [3, 1, 2]
+数组求和 hop_numbers 存 hop_total
+数组长度 hop_numbers 存 hop_count
+平方根 81 存 hop_root
+print (<{"HOP 数组求和 = "} (and) {hop_total} (and) {" 数组长度 = "} (and) {hop_count}>)
+print (<{"HOP 平方根(81) = "} (and) {hop_root}>)
+
+require_ok 1
+
+#% ------------------------------------------------------------
+#% 14. 标准库 #%include 与 v8.1 新增内置
+#% #%include 的路径相对「声明所在文件」
+#% ------------------------------------------------------------
+#%include = "../lib/math.cos"
+#%include = "../lib/text.cos"
+
+math_run factorial(5) = ? -int64
+if up = (ok) goto (push ({lib_fact} = {(in = up)}))
+math_run clamp(15, 0, 10) = ? -int64
+if up = (ok) goto (push ({lib_clamp} = {(in = up)}))
+math_run text_len({"Cosmic"}) = ? -int64
+if up = (ok) goto (push ({lib_len} = {(in = up)}))
+math_run text_upper({"lib"}) = ?
+if up = (ok) goto (push ({lib_upper} = {(in = up)}))
+print (<{"lib factorial(5)="} (and) {lib_fact} (and) {" clamp(15,0,10)="} (and) {lib_clamp}>)
+print (<{"lib text_len(text_upper)="} (and) {lib_len} (and) {" "} (and) {lib_upper}>)
+
+#% v8.1 文本内置
+math_run split_count({"a,b,c"}, ",") = ? -int64
+if up = (ok) goto (push ({segments} = {(in = up)}))
+math_run field({"a,b,c"}, ",", 2) = ?
+if up = (ok) goto (push ({segment2} = {(in = up)}))
+math_run to_number(field({"a,42"}, ",", 2)) = ? -int64
+if up = (ok) goto (push ({parsed} = {(in = up)}))
+math_run count_text({"banana"}, "an") = ? -int64
+if up = (ok) goto (push ({occurrences} = {(in = up)}))
+print (<{"split_count="} (and) {segments} (and) {" field2="} (and) {segment2} (and) {" to_number="} (and) {parsed}>)
+print (<{"count_text(banana, an)="} (and) {occurrences}>)
+
+math_run contains_text({"cosmic"}, "sm") = ? -int64
+if up = (ok) goto (push ({has_sub} = {(in = up)}))
+math_run starts_with({"cosmic"}, "cos") = ? -int64
+if up = (ok) goto (push ({has_prefix} = {(in = up)}))
+math_run ends_with({"cosmic"}, "mic") = ? -int64
+if up = (ok) goto (push ({has_suffix} = {(in = up)}))
+print (<{"contains="} (and) {has_sub} (and) {" starts="} (and) {has_prefix} (and) {" ends="} (and) {has_suffix}>)
+
+math_run repeat_text({"ab"}, 3) = ?
+if up = (ok) goto (push ({repeated} = {(in = up)}))
+math_run pad_left({"7"}, 3, "0") = ?
+if up = (ok) goto (push ({padded} = {(in = up)}))
+math_run line_count({"a\nb\n"}) = ? -int64
+if up = (ok) goto (push ({lines_n} = {(in = up)}))
+math_run line_at({"a\nb"}, 2) = ?
+if up = (ok) goto (push ({line2} = {(in = up)}))
+print (<{"repeat="} (and) {repeated} (and) {" pad_left="} (and) {padded}>)
+print (<{"line_count="} (and) {lines_n} (and) {" line_at(2)="} (and) {line2}>)
+
+#% CSPRNG 与时间：random_secure / random_bytes / now_ms
+math_run random_secure(3, 3) = ? -int64
+if up = (ok) goto (push ({secure_fixed} = {(in = up)}))
+math_run bytes_len(random_bytes(8)) = ? -int64
+if up = (ok) goto (push ({secure_bytes} = {(in = up)}))
+math_run choose(now_ms() > 0, 1, 0) = ? -int64
+if up = (ok) goto (push ({clock_ok} = {(in = up)}))
+print (<{"random_secure(3,3)="} (and) {secure_fixed} (and) {" random_bytes len="} (and) {secure_bytes}>)
+print (<{"now_ms()>0 = "} (and) {clock_ok}>)
+
+#% ------------------------------------------------------------
+#% 15. 执行块 execute：father 复制上下文、start(normal/loop)、dog 状态白名单
+#% 执行块在独立 Context 里跑；father = up 只把父上下文复制进去，块内改动不写回
+#% ------------------------------------------------------------
+math_run 5 = ? -int64
+if up = (ok) goto (push ({seed} = {(in = up)}))
+
+call = (execute)
+father = up
+start(normal) = {doubler}
+{
+    math_run {seed} * 2 = ?
+    if up = (ok) goto (push ({seed} = {(in = up)}))
+    print (<{"block local seed="} (and) {seed}>)
+}
+dog(doubler) = (pass : ok) (error : error)
+print (<{"outer seed kept="} (and) {seed}>)
+
+#% start(loop) 反复执行，直到块内 goto (to = stop)；它不能出现在执行块之外
+start(loop) = {walker}
+{
+    math_run 7 + 1 = ? -int64
+    if up = (ok) goto (push ({spin} = {(in = up)}))
+    print (<{"loop spin="} (and) {spin}>)
+    if up {spin} = (8) goto (to = stop)
+}
+dog(walker) = (pass : ok) (stop : stop)
+
+#% ------------------------------------------------------------
+#% 16. atom 原子块：lock / proton / nuclear_reactor / neutron
+#% ------------------------------------------------------------
+#atom
+call = (atom)
+push ({stage} = {"0"})
+
+father = up
+start(normal) = {stage_one}
+{
+    lock {stage_one}
+    {
+        math_run 10 + 1 = ? -int64
+        if up = (ok) goto (push ({stage} = {(in = up)}))
+    }
+}
+father = up
+start(normal) = {stage_two}
+{
+    lock {stage_two}
+    {
+        math_run {stage} + 11 = ? -int64
+        if up = (ok) goto (push ({stage} = {(in = up)}))
+    }
+}
+neutron {stage_two} = {stage_one}
+proton {pipeline} = {stage_one} -> {stage_two}
+nuclear_reactor {main} = {pipeline}
+dog(stage_two) = (pass : ok) (error : error)
+print (<{"atom stage="} (and) {stage}>)
+
+#% ------------------------------------------------------------
+#% 17. UTF-8 文件 I/O：write_text / read_text（路径相对当前工作目录）
+#% ------------------------------------------------------------
+math_run write_text("build/full_syntax_io.txt", "cosmic line one\ncosmic line two") = ? -int64
+if up = (ok) goto (push ({written} = {(in = up)}))
+math_run read_text("build/full_syntax_io.txt") = ?
+if up = (ok) goto (push ({loaded} = {(in = up)}))
+math_run line_count({loaded}) = ? -int64
+if up = (ok) goto (push ({loaded_lines} = {(in = up)}))
+print (<{"file bytes="} (and) {written} (and) {" lines="} (and) {loaded_lines}>)
+
+exit(0)
+print (<{"never printed"}>)

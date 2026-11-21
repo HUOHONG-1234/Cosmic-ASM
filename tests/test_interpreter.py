@@ -370,10 +370,11 @@ start(normal) = {math}
         self.assertEqual(interpreter.last.value, "3628800")
 
     def test_recursive_expression_function_reports_language_depth_error(self) -> None:
+        # v10 起解释器递归上限提到 4096（不再受 Python 栈限制），所以要超过它才报错。
         with self.assertRaisesRegex(RuntimeError, "function recursion depth exceeded"):
             self.run_source(
                 "function descend(n) = choose(n <= 0, 0, descend(n - 1))\n"
-                "math_run descend(300) = ?\n"
+                "math_run descend(5000) = ?\n"
             )
 
     def test_multi_statement_function_local_scope_and_return(self) -> None:
@@ -633,16 +634,6 @@ start(normal) = {math}
 
     def test_function_body_rejects_misplaced_statements(self) -> None:
         cases = {
-            "declare function local variables before any if or while statement": (
-                "function f(value)\n"
-                "{\n"
-                "if (value > 0)\n"
-                "{\n"
-                "let inner = 1\n"
-                "}\n"
-                "return value\n"
-                "}\n"
-            ),
             "unknown local 'missing'": (
                 "function f(value)\n"
                 "{\n"
@@ -755,14 +746,6 @@ start(normal) = {math}
                 "{\n"
                 "let p = Point(1)\n"
                 "return p.z\n"
-                "}\n"
-            ),
-            "cannot be used as a scalar value": (
-                "record Point { x }\n"
-                "function f()\n"
-                "{\n"
-                "let p = Point(1)\n"
-                "return p\n"
                 "}\n"
             ),
             "has no operator '-'": (

@@ -1,0 +1,62 @@
+#% examples/csv_report.cos —— CSV numeric report (English HOP verbs)
+#%
+#% Run from this directory so the relative path matches `open_file`:
+#%
+#%     cd examples
+#%     python -m cosmic_interpreter.cli csv_report.cos
+#%
+#% When the package is not installed, point PYTHONPATH at the repository root
+#% (PowerShell: $env:PYTHONPATH=".." / cmd: set PYTHONPATH=..).
+#%
+#% Compiled build (same working directory, same output):
+#%
+#%     cd examples
+#%     python -m cosmic_interpreter.compiler csv_report.cos -o csv_report.exe
+#%     .\csv_report.exe
+#%
+#% HOP `open_file` / `write_file` use the current working directory, just like
+#% read_text / write_text. Only `#%include` resolves relative to the script.
+#%
+#% Expected output:
+#%     rows=5
+#%     data_rows=4
+#%     cols=3
+#%     units_sum=50
+#%     units_median=12.5
+
+#% Load the whole CSV into a text variable.
+open_file "data/sales.csv" to csv
+
+#% Total lines (header + four data rows).
+count_lines csv to rows
+
+#% Columns are counted from the first line.
+math_run split_count(line_at({csv}, 1), ",") = ? -int64
+if up = (ok) goto (push ({cols} = {(in = up)}))
+
+#% Rows after the header.
+math_run {rows} - 1 = ? -int64
+if up = (ok) goto (push ({data_rows} = {(in = up)}))
+
+#% Pull column 2 ("units") from the four data lines into a numeric array.
+array units = [to_number(field(line_at({csv}, 2), ",", 2)), to_number(field(line_at({csv}, 3), ",", 2)), to_number(field(line_at({csv}, 4), ",", 2)), to_number(field(line_at({csv}, 5), ",", 2))]
+
+#% Sum with an English HOP array verb (array name stays bare).
+array_total units to units_sum
+
+#% Sort, then average the two middle values (four samples => even count).
+array ordered = sort_array(units)
+math_run (array_at(ordered, 1) + array_at(ordered, 2)) / 2 = ?
+if up = (ok) goto (push ({units_median} = {(in = up)}))
+
+#% Report.
+push ({line_rows} = {"rows="} (and) {rows})
+print (<{line_rows}>)
+push ({line_data} = {"data_rows="} (and) {data_rows})
+print (<{line_data}>)
+push ({line_cols} = {"cols="} (and) {cols})
+print (<{line_cols}>)
+push ({line_sum} = {"units_sum="} (and) {units_sum})
+print (<{line_sum}>)
+push ({line_median} = {"units_median="} (and) {units_median})
+print (<{line_median}>)

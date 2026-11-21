@@ -1,0 +1,76 @@
+#% v10 Omega 示例：拆掉递归/输出/拼接/记录文本字段这四堵墙
+#%
+#% 这个文件本身就是「写代码生成器」需要的最小能力集：
+#%   - 函数里能 print（调试 + 输出）
+#%   - 循环里能声明局部变量
+#%   - 能拼接文本、能把数字转文本（缓冲区追加）
+#%   - 记录能装文本字段（AST 节点）
+#%   - 递归够深（解释器 4096 层 / 编译版 1024 层）
+#%
+#%   python -m cosmic_interpreter.cosmic_cli run examples/v10_omega.cos
+#%   python -m cosmic_interpreter.cosmic_cli build examples/v10_omega.cos -o v10demo
+
+record Token { kind : text, text : text, line }
+
+#% 递归：v9 之前 20 层就要几十秒，现在 1000 层是毫秒级
+function depth(n)
+{
+    if (n <= 0)
+    {
+        return 0
+    }
+    return depth(n - 1) + 1
+}
+
+#% 循环 + 局部变量 + 文本累积：一个极小的「代码/文本生成器」
+function build_list(times) -> text
+{
+    let acc = ""
+    let i = 1
+    while (i <= times)
+    {
+        let piece = text_concat("item", to_text(i))
+        if (i > 1)
+        {
+            set acc = text_concat(acc, ",")
+        }
+        set acc = text_concat(acc, piece)
+        set i = i + 1
+    }
+    return acc
+}
+
+#% 记录文本字段：描述一个 token
+function describe(token : Token) -> text
+{
+    return text_concat(text_concat(text_concat(token.kind, ":"), text_concat(token.text, "@")), to_text(token.line))
+}
+
+#% 函数内输出：把一列 token 打印出来
+function dump(tokens_left)
+{
+    if (tokens_left <= 0)
+    {
+        return 0
+    }
+    print (<"token line " (and) {tokens_left}>)
+    return dump(tokens_left - 1)
+}
+
+math_run depth(1000) = ?
+if up = (ok) goto (push ({deep} = {(in = up)}))
+print (<{"depth(1000) = "} (and) {deep}>)
+
+math_run build_list(4) = ?
+if up = (ok) goto (push ({listing} = {(in = up)}))
+print (<{"list = "} (and) {listing}>)
+
+math_run text_join([10, 20, 30], " / ") = ?
+if up = (ok) goto (push ({joined} = {(in = up)}))
+print (<{"joined = "} (and) {joined}>)
+
+math_run describe(Token("let", "x", 3)) = ?
+if up = (ok) goto (push ({described} = {(in = up)}))
+print (<{"token = "} (and) {described}>)
+
+math_run dump(2) = ?

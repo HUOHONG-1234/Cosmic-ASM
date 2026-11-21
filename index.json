@@ -11,6 +11,16 @@
       "version": "1.0.0",
       "subdir": "packages/seqkit",
       "description": "Integer sequences: triangular, fib."
+    },
+    "algokit": {
+      "version": "1.0.0",
+      "subdir": "packages/algokit",
+      "description": "Sorting and lookup helpers: sorted_sum, contains, sorted_median."
+    },
+    "datakit": {
+      "version": "1.0.0",
+      "subdir": "packages/datakit",
+      "description": "Numeric CSV helpers: csv_row_count, csv_col_count."
     }
   }
 }

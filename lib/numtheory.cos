@@ -1,0 +1,122 @@
+#% lib/numtheory.cos —— 数论库（纯数值）
+#%
+#% 全部是纯整数值函数，解释器与 C 后端行为一致。
+#% 函数体内的局部名都在最外层、任何 if/while 之前用 let 声明。
+#%
+#% 用法：
+#%
+#%     #%include = "lib/numtheory.cos"
+#%     math_run gcd(48, 18) = ? -int64        # 6
+#%     math_run is_prime(97) = ? -int64       # 1
+#%
+#% 参数按非负整数使用；负数不报错，但结果没有数学意义。
+
+#% 最大公约数：辗转相除
+function gcd(a, b)
+{
+    let x = a
+    let y = b
+    let remainder = 0
+    while (y != 0)
+    {
+        set remainder = x % y
+        set x = y
+        set y = remainder
+    }
+    return x
+}
+
+#% 最小公倍数：任一参数为 0 时返回 0（避免除零）
+function lcm(a, b)
+{
+    if (a == 0)
+    {
+        return 0
+    }
+    if (b == 0)
+    {
+        return 0
+    }
+    return (a * b) // gcd(a, b)
+}
+
+#% 素性判定：返回 1 表示素数，0 表示合数或小于 2
+function is_prime(n)
+{
+    let divisor = 2
+    if (n < 2)
+    {
+        return 0
+    }
+    while (divisor * divisor <= n)
+    {
+        if (n % divisor == 0)
+        {
+            return 0
+        }
+        set divisor = divisor + 1
+    }
+    return 1
+}
+
+#% 正因数个数：n <= 0 时返回 0，n == 1 时返回 1
+function factor_count(n)
+{
+    let count = 0
+    let divisor = 1
+    if (n <= 0)
+    {
+        return 0
+    }
+    while (divisor <= n)
+    {
+        if (n % divisor == 0)
+        {
+            set count = count + 1
+        }
+        set divisor = divisor + 1
+    }
+    return count
+}
+
+#% 组合数 C(n, k)：k 越界时返回 0
+function comb(n, k)
+{
+    let result = 1
+    let index = 1
+    if (k < 0)
+    {
+        return 0
+    }
+    if (k > n)
+    {
+        return 0
+    }
+    while (index <= k)
+    {
+        set result = result * (n - k + index) // index
+        set index = index + 1
+    }
+    return result
+}
+
+#% 排列数 P(n, k)：k 越界时返回 0
+function perm(n, k)
+{
+    let result = 1
+    let index = 1
+    if (k < 0)
+    {
+        return 0
+    }
+    if (k > n)
+    {
+        return 0
+    }
+    while (index <= k)
+    {
+        set result = result * (n - index + 1)
+        set index = index + 1
+    }
+    return result
+}

@@ -1,33 +1,41 @@
-"""统一的 ``cosmic`` 命令行入口（v8 主线 E1）。
+"""Unified ``cosmic`` command line entry point (v8 track E1).
 
-三个旧入口合并成一个可执行文件：
+One executable replaces the three legacy entry points:
 
-* ``cosmic run <文件>``      → 解释执行（等价旧的 CosmicInterpreter.exe）
-* ``cosmic run --repl``      → 打开 TUI REPL
-* ``cosmic build <文件>``    → 翻译成 C 并调用 GCC（等价旧的 CosmicCompiler.exe）
-* ``cosmic pkg <子命令>``    → 包管理器（等价旧的 cosp.exe）
-* ``cosmic index``           → 列出远端索引里的包（``cosmic pkg index`` 的简写）
-* ``cosmic tui``             → 打开 TUI REPL
-* ``cosmic version``         → 版本信息
+* ``cosmic run <file>``      - run a source file with the interpreter
+* ``cosmic run --repl``      - open the TUI REPL
+* ``cosmic build <file>``    - translate to C and invoke GCC
+* ``cosmic build``           - build the current project's ``entry`` (like cosp build)
+* ``cosmic init/new/add/remove/install/index/test`` - package manager (cosp)
+* ``cosmic pkg <sub>``       - same package manager commands under the old namespace
+* ``cosmic tui``             - open the TUI REPL
+* ``cosmic version``         - version information
 
-为了不破坏既有脚本，旧入口仍可通过 ``cosmic_interpreter.cli`` /
-``cosmic_interpreter.compiler`` / ``cosmic_interpreter.cosp`` 直接调用。
+The legacy entry points (``cosmic_interpreter.cli`` / ``.compiler`` / ``.cosp``)
+keep working, so existing scripts do not break.
 """
 
 from __future__ import annotations
 
 import sys
 
-__version__ = "0.1.0"
+__version__ = "2.0.0"
 
 _EPILOG = """\
-示例:
-  cosmic run program.cos            解释执行
-  cosmic run --repl                 打开 REPL
-  cosmic build program.cos -o app   编译为原生程序
-  cosmic pkg install                按 cosp.lock 安装依赖
-  cosmic index                      列出远端索引里的包
+Examples:
+  cosmic run program.cos            run with the interpreter
+  cosmic run --repl                 open the REPL
+  cosmic build program.cos -o app   compile to a native executable
+  cosmic new demo                   create a project
+  cosmic install mathx              add a package from the index and install it
+  cosmic install                    install everything from cosp.toml
+  cosmic index                      list packages in the remote index
 """
+
+# cosp subcommands exposed directly at the top level.
+_COSP_COMMANDS = frozenset(
+    {"init", "new", "add", "remove", "install", "index", "test", "pkg"}
+)
 
 
 def _run(args: list[str]) -> int:
@@ -39,6 +47,15 @@ def _run(args: list[str]) -> int:
 
 
 def _build(args: list[str]) -> int:
+    """``build <file>`` compiles that file; bare ``build`` builds the project entry."""
+    looks_like_file = bool(args) and (
+        args[0].lower().endswith(".cos") or args[0] in {"-h", "--help"}
+    )
+    if args and not looks_like_file:
+        # 第一个参数不是源文件时按项目构建处理，交给 cosp。
+        from .cosp import main as cosp_main
+
+        return cosp_main(["build", *args], prog="cosmic")
     from .compiler import main as compiler_main
 
     return compiler_main(args)
@@ -47,7 +64,7 @@ def _build(args: list[str]) -> int:
 def _pkg(args: list[str]) -> int:
     from .cosp import main as cosp_main
 
-    return cosp_main(args)
+    return cosp_main(args, prog="cosmic")
 
 
 def _repl() -> int:
@@ -62,28 +79,37 @@ def _version() -> int:
     return 0
 
 
-_USAGE = """\
-用法: cosmic <命令> [参数...]
-
-命令:
-  run <文件> [参数]    解释执行 .cos 文件
-  run --repl           打开 TUI REPL
-  build <文件> [...]   编译成原生可执行文件（其余参数透传给编译器）
-  pkg <子命令> [...]   包管理器（参数透传给 cosp）
-  index [--index URL]  列出远端索引里的包
-  tui                  打开 TUI REPL
-  version              显示版本信息
-
-""" + _EPILOG
+def _usage() -> str:
+    return (
+        "usage: cosmic <command> [args...]\n"
+        "\n"
+        "commands:\n"
+        "  run <file> [args]        run a .cos file with the interpreter\n"
+        "  run --repl               open the TUI REPL\n"
+        "  repl                     open the TUI REPL (same as tui)\n"
+        "  build <file> [options]   compile a .cos file to a native executable\n"
+        "  build                    build the current project's entry file\n"
+        "  init [--name NAME]       initialize a project in the current directory\n"
+        "  new <name> [--template]  create a project from a scaffold\n"
+        "  add <name> [path|url]    add a dependency (index, local path, or HTTPS ZIP)\n"
+        "  remove <name>            remove a dependency\n"
+        "  install [names...]       install dependencies; names are resolved from the index\n"
+        "  index [--index URL]      list packages published in the remote index\n"
+        "  test [args]              run the project's Python unittest suite\n"
+        "  pkg <subcommand> [...]   package manager commands under the old namespace\n"
+        "  tui                      open the TUI REPL\n"
+        "  version                  print version information\n"
+        "\n" + _EPILOG
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
-    # 不用 argparse 的子命令：这里要把 `build x.cos -o app`、`pkg add x url`
-    # 之类的参数**按原顺序**透传，argparse 的 REMAINDER 遇到前置 --flag 会报
-    # unrecognized arguments。
+    # No argparse subparsers here: arguments such as `build x.cos -o app` must be
+    # forwarded in their original order, and argparse's REMAINDER rejects leading
+    # option-like tokens.
     tokens = list(sys.argv[1:] if argv is None else argv)
     if not tokens or tokens[0] in {"-h", "--help", "help"}:
-        print(_USAGE, end="")
+        print(_usage(), end="")
         return 0 if tokens else 2
     if tokens[0] == "--version":
         return _version()
@@ -92,16 +118,19 @@ def main(argv: list[str] | None = None) -> int:
         return _run(rest)
     if command == "build":
         return _build(rest)
-    if command == "pkg":
-        return _pkg(rest)
-    if command == "index":
-        return _pkg(["index", *rest])
-    if command == "tui":
+    if command in {"tui", "repl"}:
         return _repl()
     if command == "version":
         return _version()
-    print(f"cosmic: 未知命令 '{command}'\n", file=sys.stderr)
-    print(_USAGE, end="", file=sys.stderr)
+    if command in _COSP_COMMANDS:
+        if command == "pkg":
+            # `cosmic pkg install x` → cosp 收到 ["install", "x"]（pkg 只是命名空间）
+            if not rest:
+                return _pkg(["--help"])
+            return _pkg(rest)
+        return _pkg([command, *rest])
+    print(f"cosmic: unknown command '{command}'\n", file=sys.stderr)
+    print(_usage(), end="", file=sys.stderr)
     return 2
 
 

@@ -39,6 +39,8 @@ class Program:
     memory_mode: str = "heap"
     maxlen: int = 0
     on_oom: str = "abort"
+    # 记录名 -> {字段: 'number'|'text'}（v10 B7：记录字段可以带类型）
+    record_types: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = ()
 
 
 def _iter_expression_texts(statement: Statement):
@@ -222,11 +224,13 @@ _BYTES_CALL_RE = re.compile(
     r"bytes_(set|get|len)\s*\((.*)\)\s*(?:=\s*\?)?\s*$", re.I
 )
 _FUNCTION_RE = re.compile(
-    r"(?:generic\s+)?function\s+([A-Za-z_]\w*)\s*\((.*?)\)\s*=\s*(.+)\s*$",
+    r"(?:generic\s+)?function\s+([A-Za-z_]\w*)\s*\((.*?)\)\s*"
+    r"(?:->\s*([A-Za-z_]\w*)\s*)?=\s*(.+)\s*$",
     re.I,
 )
 _FUNCTION_HEADER_RE = re.compile(
-    r"(?:generic\s+)?function\s+([A-Za-z_]\w*)\s*\((.*?)\)\s*$",
+    r"(?:generic\s+)?function\s+([A-Za-z_]\w*)\s*\((.*?)\)\s*"
+    r"(?:->\s*([A-Za-z_]\w*)\s*)?$",
     re.I,
 )
 _FUNCTION_LOCAL_RE = re.compile(r"let\s+([A-Za-z_]\w*)\s*=\s*(.+)\s*$", re.I)
@@ -293,6 +297,8 @@ _DISABLED_FEATURE_FUNCTIONS = {
     ),
 }
 _RECORD_RE = re.compile(r"record\s+([A-Za-z_]\w*)\s*\{([^{}]*)\}\s*$", re.I)
+# v10 B7：记录字段可标注的类型。数值是默认值，text 让 AST 节点能装标识符/字面量。
+_RECORD_FIELD_TYPES = frozenset({"number", "text"})
 _OPERATOR_RE = re.compile(
     r"operator\s*([+\-*/])\s*([A-Za-z_]\w*)\s*=\s*\{(.*)\}\s*$", re.I
 )
@@ -313,6 +319,9 @@ class _Parser:
         self.extern_functions: dict[str, dict[str, object]] = {}
         self.link_libraries: list[str] = []
         self.records: dict[str, tuple[str, ...]] = {}
+        self.function_returns: dict[str, str] = {}
+        # 记录名 -> {字段: 'number'|'text'}
+        self.record_types: dict[str, dict[str, str]] = {}
         self.operators: dict[tuple[str, str], tuple[str, ...]] = {}
         self.namespace: str | None = None
         self.aliases: dict[str, tuple[int, str]] = {}
@@ -614,6 +623,10 @@ class _Parser:
             self.memory_mode,
             self.maxlen,
             self.on_oom,
+            tuple(
+                (name, tuple(sorted(fields.items())))
+                for name, fields in sorted(self.record_types.items())
+            ),
         )
 
     def _sequence(self, in_block: bool) -> list[Statement]:
@@ -746,15 +759,31 @@ class _Parser:
                 if in_block:
                     raise ParseError(number, "record declarations are only valid at the top level")
                 record_name, raw_fields = record_match.groups()
-                record_fields = [
+                field_entries = [
                     field.strip() for field in raw_fields.split(",") if field.strip()
                 ]
-                if not record_fields:
+                if not field_entries:
                     raise ParseError(number, "record must declare at least one field")
-                if any(
-                    not re.fullmatch(r"[A-Za-z_]\w*", field) for field in record_fields
-                ):
-                    raise ParseError(number, "record fields must be identifiers")
+                record_fields: list[str] = []
+                field_types: dict[str, str] = {}
+                for entry in field_entries:
+                    # v10 B7：字段可以带类型标注，`field : text`；缺省是数值。
+                    if ":" in entry:
+                        field_name, _, type_name = entry.partition(":")
+                        field_name, type_name = field_name.strip(), type_name.strip()
+                        if type_name.lower() not in _RECORD_FIELD_TYPES:
+                            raise ParseError(
+                                number,
+                                f"record field '{field_name}' has unknown type '{type_name}'; "
+                                f"expected one of: {', '.join(sorted(_RECORD_FIELD_TYPES))}",
+                            )
+                        if type_name.lower() == "text":
+                            field_types[field_name] = "text"
+                    else:
+                        field_name = entry
+                    if not re.fullmatch(r"[A-Za-z_]\w*", field_name):
+                        raise ParseError(number, "record fields must be identifiers")
+                    record_fields.append(field_name)
                 if len(set(record_fields)) != len(record_fields):
                     raise ParseError(number, "record field names must be unique")
                 if record_name.lower() in {
@@ -762,11 +791,18 @@ class _Parser:
                 }:
                     raise ParseError(number, f"record '{record_name}' is already declared")
                 self.records[record_name] = tuple(record_fields)
+                self.record_types[record_name] = {
+                    field: field_types.get(field, "number") for field in record_fields
+                }
                 statements.append(
                     Statement(
                         "record",
                         number,
-                        {"name": record_name, "fields": tuple(record_fields)},
+                        {
+                            "name": record_name,
+                            "fields": tuple(record_fields),
+                            "field_types": dict(self.record_types[record_name]),
+                        },
                     )
                 )
                 continue
@@ -1192,6 +1228,12 @@ class _Parser:
                     raise ParseError(number, "invalid math_run expression")
                 expression = math_match.group(1).strip()
                 self._validate_braced_expression(expression, number)
+                if self.records and any(
+                    re.search(rf"\b{re.escape(record)}\s*\(", expression)
+                    for record in self.records
+                ):
+                    # 顶层表达式里也可能直接构造记录：`math_run f(Node("x", 1)) = ?`
+                    expression = self._expand_record_values(expression, number, {})
                 statements.append(
                     Statement(
                         "math",
@@ -1269,22 +1311,32 @@ class _Parser:
                         "function declarations must be at the top level; "
                         "nested functions are only supported inside function bodies",
                     )
-                name, raw_parameters, expression = function_match.groups()
+                name, raw_parameters, raw_return_type, expression = function_match.groups()
                 is_generic = line.lower().startswith("generic ")
                 self._validate_braced_expression(expression, number)
-                parameters = [
-                    parameter.strip()
-                    for parameter in raw_parameters.split(",")
-                    if parameter.strip()
-                ]
-                if any(not re.fullmatch(r"[A-Za-z_]\w*", parameter) for parameter in parameters):
-                    raise ParseError(number, "function parameters must be identifiers")
-                if len(set(parameters)) != len(parameters):
-                    raise ParseError(number, "function parameter names must be unique")
+                parameters, parameter_types = self._parse_parameter_list(
+                    raw_parameters, number
+                )
+                return_type = self._parse_return_type(raw_return_type, number)
+                parameter_fields = self._record_parameter_fields(parameter_types)
+                record_locals = {
+                    parameter: type_name
+                    for parameter, type_name in parameter_types.items()
+                    if type_name in self.records
+                }
+                normalized = self._function_body_expression(
+                    expression.strip(),
+                    number,
+                    parameters,
+                    set(),
+                    record_locals,
+                )
                 declared_name = (
                     f"{self.namespace}__{name}" if self.namespace else name
                 )
                 self.function_parameters[declared_name.lower()] = tuple(parameters)
+                if return_type:
+                    self.function_returns[declared_name.lower()] = return_type
                 statements.append(
                     Statement(
                         "function",
@@ -1293,7 +1345,10 @@ class _Parser:
                             "name": declared_name,
                             "symbol": name,
                             "parameters": parameters,
-                            "expression": expression.strip(),
+                            "parameter_types": parameter_types,
+                            "parameter_fields": parameter_fields,
+                            "return_type": return_type,
+                            "expression": normalized,
                             "generic": is_generic,
                         },
                     )
@@ -1307,24 +1362,23 @@ class _Parser:
                         "function declarations must be at the top level; "
                         "nested functions are only supported inside function bodies",
                     )
-                name, raw_parameters = function_header.groups()
-                parameters = [
-                    parameter.strip()
-                    for parameter in raw_parameters.split(",")
-                    if parameter.strip()
-                ]
-                if any(not re.fullmatch(r"[A-Za-z_]\w*", parameter) for parameter in parameters):
-                    raise ParseError(number, "function parameters must be identifiers")
-                if len(set(parameters)) != len(parameters):
-                    raise ParseError(number, "function parameter names must be unique")
+                name, raw_parameters, raw_return_type = function_header.groups()
+                parameters, parameter_types = self._parse_parameter_list(
+                    raw_parameters, number
+                )
+                return_type = self._parse_return_type(raw_return_type, number)
                 is_generic = line.lower().startswith("generic ")
                 if self.index >= len(self.lines) or self.lines[self.index][1] != "{":
                     raise ParseError(number, "expected '{' after function declaration")
                 self.index += 1
                 declared_name = f"{self.namespace}__{name}" if self.namespace else name
                 self.function_parameters[declared_name.lower()] = tuple(parameters)
+                if return_type:
+                    self.function_returns[declared_name.lower()] = return_type
                 if self._function_body_needs_statements():
-                    body = self._parse_statement_function_body(parameters, number)
+                    body = self._parse_statement_function_body(
+                        parameters, parameter_types, number
+                    )
                     statements.append(
                         Statement(
                             "function",
@@ -1333,6 +1387,11 @@ class _Parser:
                                 "name": declared_name,
                                 "symbol": name,
                                 "parameters": parameters,
+                                "parameter_types": parameter_types,
+                                "parameter_fields": self._record_parameter_fields(
+                                    parameter_types
+                                ),
+                                "return_type": return_type,
                                 "body": body,
                                 "generic": is_generic,
                             },
@@ -1352,6 +1411,15 @@ class _Parser:
                     for local in sorted(names, key=len, reverse=True):
                         transformed = re.sub(
                             rf"\bvar_{re.escape(local)}\b", local, transformed
+                        )
+                    record_params = {
+                        name: type_name
+                        for name, type_name in parameter_types.items()
+                        if type_name in self.records
+                    }
+                    if record_params:
+                        transformed = self._replace_record_field_access(
+                            transformed, expression_line, record_params
                         )
                     try:
                         tree = ast.parse(transformed, mode="eval")
@@ -1599,6 +1667,11 @@ class _Parser:
                             "name": declared_name,
                             "symbol": name,
                             "parameters": parameters,
+                            "parameter_types": parameter_types,
+                            "parameter_fields": self._record_parameter_fields(
+                                parameter_types
+                            ),
+                            "return_type": return_type,
                             "expression": return_expression,
                             "generic": is_generic,
                         },
@@ -1768,11 +1841,21 @@ class _Parser:
             else:
                 lowered = text.lower()
                 if lowered.startswith(
-                    ("set ", "while ", "while(", "break", "continue", "function ", "generic function ")
+                    (
+                        "set ", "while ", "while(", "break", "continue",
+                        "function ", "generic function ", "print",
+                    )
                 ):
                     return True
                 if self.records and any(
                     re.search(rf"\b{re.escape(record)}\b", text) for record in self.records
+                ):
+                    return True
+                # 记录构造器或「返回记录的函数」出现在一行里：走语句体路径才能解构字段。
+                if self.records and any(
+                    re.search(rf"\b{re.escape(name)}\s*\(", text)
+                    for name, returned in self.function_returns.items()
+                    if returned in self.records
                 ):
                     return True
                 if depth == 0:
@@ -1788,12 +1871,17 @@ class _Parser:
         return False
 
     def _parse_statement_function_body(
-        self, parameters: list[str], header_line: int
+        self, parameters: list[str], parameter_types: dict[str, str], header_line: int
     ) -> tuple[Statement, ...]:
+        record_params = {
+            parameter: type_name
+            for parameter, type_name in parameter_types.items()
+            if type_name in self.records
+        }
         return self._parse_function_statements(
             parameters,
             set(),
-            {},
+            dict(record_params),
             loop_depth=0,
             owner_line=header_line,
             nested=False,
@@ -1820,19 +1908,11 @@ class _Parser:
                 raise ParseError(number, "return must be the final statement in a function")
             nested_match = _FUNCTION_RE.fullmatch(text)
             if nested_match:
-                nested_name, raw_parameters, expression = nested_match.groups()
-                nested_parameters = [
-                    parameter.strip()
-                    for parameter in raw_parameters.split(",")
-                    if parameter.strip()
-                ]
-                if any(
-                    not re.fullmatch(r"[A-Za-z_]\w*", parameter)
-                    for parameter in nested_parameters
-                ):
-                    raise ParseError(number, "function parameters must be identifiers")
-                if len(set(nested_parameters)) != len(nested_parameters):
-                    raise ParseError(number, "function parameter names must be unique")
+                nested_name, raw_parameters, raw_return_type, expression = nested_match.groups()
+                nested_parameters, nested_parameter_types = self._parse_parameter_list(
+                    raw_parameters, number
+                )
+                nested_return_type = self._parse_return_type(raw_return_type, number)
                 if nested_name in parameters or nested_name in declared:
                     raise ParseError(number, f"local '{nested_name}' is already declared")
                 normalized, captures = self._nested_function_expression(
@@ -1846,6 +1926,8 @@ class _Parser:
                         {
                             "name": nested_name,
                             "parameters": nested_parameters,
+                            "parameter_types": nested_parameter_types,
+                            "return_type": nested_return_type,
                             "expression": normalized,
                             "captures": captures,
                         },
@@ -1860,11 +1942,6 @@ class _Parser:
             local_match = _FUNCTION_LOCAL_RE.fullmatch(text)
             if local_match:
                 name, expression = local_match.groups()
-                if nested:
-                    raise ParseError(
-                        number,
-                        "declare function local variables before any if or while statement",
-                    )
                 if name in parameters or name in declared:
                     raise ParseError(number, f"local '{name}' is already declared")
                 value = self._function_body_expression(
@@ -1909,9 +1986,36 @@ class _Parser:
                         )
                     )
                 else:
-                    statements.append(
-                        Statement("function_local", number, {"name": name, "expression": value})
-                    )
+                    record_call = self._record_call_type(value)
+                    if record_call is not None:
+                        # 实参里的记录要展开成字段数组，由表达式层重新生成。
+                        value = self._function_body_expression(
+                            expression.strip(),
+                            number,
+                            parameters,
+                            declared - {name},
+                            record_locals,
+                        )
+                    if record_call is not None:
+                        record_locals[name] = record_call
+                        statements.append(
+                            Statement(
+                                "function_record_call_local",
+                                number,
+                                {
+                                    "name": name,
+                                    "record": record_call,
+                                    "expression": value,
+                                    "record_fields": self.records[record_call],
+                                },
+                            )
+                        )
+                    else:
+                        statements.append(
+                            Statement(
+                                "function_local", number, {"name": name, "expression": value}
+                            )
+                        )
                 continue
             assignment = _FUNCTION_SET_RE.fullmatch(text)
             if assignment:
@@ -2074,9 +2178,34 @@ class _Parser:
                 )
                 terminated = True
                 continue
+            print_match = _PRINT_RE.fullmatch(text)
+            if print_match:
+                # v10 B3：函数体内可以 print。`(and)` 拼接在函数里没有 value spec，
+                # 所以按片段存起来，由两个后端各自格式化后连接（数字也能混进来）。
+                inner = print_match.group(1).strip()
+                raw_parts = re.split(r"\(\s*and\s*\)", inner, flags=re.I)
+                parts = [
+                    self._function_body_expression(
+                        part.strip(), number, parameters, declared, record_locals
+                    )
+                    for part in raw_parts
+                    if part.strip()
+                ]
+                if not parts:
+                    raise ParseError(number, "invalid print expression")
+                statements.append(
+                    Statement(
+                        "function_print",
+                        number,
+                        {"parts": parts, "encoding": print_match.group(2)},
+                    )
+                )
+                continue
+            if text.lower().startswith("print"):
+                raise ParseError(number, "invalid print expression")
             raise ParseError(
                 number,
-                "function body accepts let, set, if, while, break, continue, and return statements",
+                "function body accepts let, set, if, while, break, continue, return, and print statements",
             )
         raise ParseError(owner_line, "unterminated function body")
 
@@ -2120,6 +2249,154 @@ class _Parser:
         )
         return transformed, captures
 
+    def _record_operator_fields(
+        self, tree: ast.expr, line: int, record_locals: dict[str, str]
+    ) -> list[str] | None:
+        """``a + b`` 这类记录运算按声明的算子展开成字段表达式列表。"""
+        if not isinstance(tree, ast.BinOp) or not record_locals:
+            return None
+        if not isinstance(tree.left, ast.Name) or not isinstance(tree.right, ast.Name):
+            return None
+        left_type = record_locals.get(tree.left.id)
+        right_type = record_locals.get(tree.right.id)
+        if left_type is None or right_type is None or left_type != right_type:
+            return None
+        symbol = {
+            ast.Add: "+",
+            ast.Sub: "-",
+            ast.Mult: "*",
+            ast.Div: "/",
+        }.get(type(tree.op))
+        if symbol is None:
+            return None
+        declared = self.operators.get((symbol, left_type))
+        if declared is None:
+            return None
+        fields: list[str] = []
+        for template in declared:
+            rendered = template
+            for side, name in (("left", tree.left.id), ("right", tree.right.id)):
+                for field in self.records[left_type]:
+                    rendered = re.sub(
+                        rf"\b{side}\s*\.\s*{re.escape(field)}\b",
+                        f"{name}__{field}",
+                        rendered,
+                    )
+            fields.append(rendered)
+        return fields
+
+    def _record_call_type(self, expression: str) -> str | None:
+        """``f(...)`` 且 ``f`` 声明了记录返回值时，返回该记录类型名。"""
+        try:
+            tree = ast.parse(expression, mode="eval").body
+        except SyntaxError:
+            return None
+        if not (isinstance(tree, ast.Call) and isinstance(tree.func, ast.Name)):
+            return None
+        returned = self.function_returns.get(tree.func.id.lower())
+        if returned is None or returned not in self.records:
+            return None
+        return returned
+
+    def _replace_record_field_access(
+        self, transformed: str, line: int, record_locals: dict[str, str]
+    ) -> str:
+        """``p.field`` -> ``p__field``；未知字段在解析期报错。"""
+        for name in sorted(record_locals, key=len, reverse=True):
+            fields = self.records[record_locals[name]]
+
+            def replace_field(match: re.Match[str], owner: str = name, known=fields) -> str:
+                field = match.group(1)
+                if field not in known:
+                    raise ParseError(
+                        line,
+                        f"record '{record_locals[owner]}' has no field '{field}'",
+                    )
+                return f"{owner}__{field}"
+
+            transformed = re.sub(
+                rf"\b{re.escape(name)}\s*\.\s*([A-Za-z_]\w*)", replace_field, transformed
+            )
+        return transformed
+
+    def _expand_record_values(
+        self, transformed: str, line: int, record_locals: dict[str, str]
+    ) -> str:
+        """把记录构造器和整体记录用法改写成数组字面量（记录在运行期就是字段数组）。"""
+        if not record_locals and not self.records:
+            return transformed
+        try:
+            tree = ast.parse(transformed, mode="eval")
+        except SyntaxError:
+            return transformed
+        records = self.records
+        operator_fields = self._record_operator_fields(tree.body, line, record_locals)
+        if operator_fields is not None:
+            record_name = record_locals.get(
+                tree.body.left.id if isinstance(tree.body, ast.BinOp) else "", ""
+            )
+            return self._record_literal_call(record_name, operator_fields)
+
+        builder = self
+
+        class Expander(ast.NodeTransformer):
+            changed = False
+
+            def visit_Call(self, node: ast.Call) -> ast.expr:
+                self.generic_visit(node)
+                if isinstance(node.func, ast.Name) and node.func.id in records:
+                    fields = records[node.func.id]
+                    if node.keywords:
+                        raise ParseError(line, "record constructors do not accept keywords")
+                    if len(node.args) != len(fields):
+                        raise ParseError(
+                            line,
+                            f"record '{node.func.id}' expects {len(fields)} value(s), "
+                            f"got {len(node.args)}",
+                        )
+                    self.changed = True
+                    return ast.parse(
+                        builder._record_literal_call(
+                            node.func.id,
+                            [ast.unparse(ast.fix_missing_locations(a)) for a in node.args],
+                        ),
+                        mode="eval",
+                    ).body
+                return node
+
+            def visit_Name(self, node: ast.Name) -> ast.expr:
+                if (
+                    isinstance(node.ctx, ast.Load)
+                    and node.id in record_locals
+                    and record_locals[node.id] in records
+                ):
+                    record_name = record_locals[node.id]
+                    fields = records[record_name]
+                    self.changed = True
+                    return ast.parse(
+                        builder._record_literal_call(
+                            record_name, [f"{node.id}__{field}" for field in fields]
+                        ),
+                        mode="eval",
+                    ).body
+                return node
+
+        expander = Expander()
+        rewritten = expander.visit(tree)
+        if not expander.changed:
+            # 没有记录参与时保持原文：ast.unparse 会把 "x" 规范化成 'x'，
+            # 那会破坏花括号字面量 {"x"}。
+            return transformed
+        return ast.unparse(ast.fix_missing_locations(rewritten))
+
+    def _record_literal_call(self, record_name: str, field_values: list[str]) -> str:
+        """记录值在表达式里写作 ``__record_<类型>__(字段...)``。
+
+        带类型名是必要的：C 后端要据此生成对应的 struct 字面量，而解释器只需要按
+        顺序取值。纯 list 字面量装不下文本字段（数组只收数值）。
+        """
+        return f"__record_{record_name}__(" + ", ".join(field_values) + ")"
+
     def _function_body_expression(
         self,
         expression: str,
@@ -2135,21 +2412,7 @@ class _Parser:
         transformed, _ = transform_braced_expression(expression)
         for name in sorted(set(parameters) | declared, key=len, reverse=True):
             transformed = re.sub(rf"\bvar_{re.escape(name)}\b", name, transformed)
-        for name in sorted(record_locals, key=len, reverse=True):
-            fields = self.records[record_locals[name]]
-
-            def replace_field(match: re.Match[str]) -> str:
-                field = match.group(1)
-                if field not in fields:
-                    raise ParseError(
-                        line,
-                        f"record '{record_locals[name]}' has no field '{field}'",
-                    )
-                return f"{name}__{field}"
-
-            transformed = re.sub(
-                rf"\b{re.escape(name)}\s*\.\s*([A-Za-z_]\w*)", replace_field, transformed
-            )
+        transformed = self._replace_record_field_access(transformed, line, record_locals)
         try:
             tree = ast.parse(transformed, mode="eval")
         except SyntaxError as error:
@@ -2166,19 +2429,11 @@ class _Parser:
                 line,
                 "function bodies cannot access caller variables; pass values as parameters",
             )
-        whole_records = sorted(
-            {
-                node.id
-                for node in ast.walk(tree)
-                if isinstance(node, ast.Name) and node.id in record_locals
-            }
-        )
-        if whole_records and not allow_record:
-            raise ParseError(
-                line,
-                f"record '{whole_records[0]}' cannot be used as a scalar value; use {whole_records[0]}.field",
-            )
-        return transformed
+        if allow_record:
+            # 调用方（let）会自己判断记录构造/拷贝，这里保持原样。
+            return transformed
+        # 记录作为值（实参、返回值）时等价于「字段数组」。
+        return self._expand_record_values(transformed, line, record_locals)
 
     def _record_operand(
         self,
@@ -2314,6 +2569,61 @@ class _Parser:
             transform_braced_expression(expression)
         except ValueError as error:
             raise ParseError(line, f"invalid braced expression: {error}") from error
+
+    def _record_parameter_fields(
+        self, parameter_types: dict[str, str]
+    ) -> dict[str, tuple[str, ...]]:
+        """``记录类型参数 -> 字段名``，供解释器/C 后端把参数当成字段数组。"""
+        return {
+            parameter: self.records[type_name]
+            for parameter, type_name in parameter_types.items()
+            if type_name in self.records
+        }
+
+    def _parse_parameter_list(
+        self, raw_parameters: str, line: int
+    ) -> tuple[list[str], dict[str, str]]:
+        """解析参数表，允许 ``name`` 或 ``name : type`` 两种写法，可混用。
+
+        返回 ``(参数名列表, {参数名: 类型名})``；未标注的参数不出现在第二个返回值里
+        （交给调用点按 ``number`` 处理）。
+        """
+        names: list[str] = []
+        types: dict[str, str] = {}
+        for raw in raw_parameters.split(","):
+            entry = raw.strip()
+            if not entry:
+                continue
+            if ":" in entry:
+                name, _, type_name = entry.partition(":")
+                name, type_name = name.strip(), type_name.strip()
+                if not type_name:
+                    raise ParseError(
+                        line, f"parameter '{name}' is missing a type after ':'"
+                    )
+                if not re.fullmatch(r"[A-Za-z_]\w*", type_name):
+                    raise ParseError(line, f"invalid parameter type '{type_name}'")
+                types[name] = type_name
+            else:
+                name = entry
+            if not re.fullmatch(r"[A-Za-z_]\w*", name):
+                raise ParseError(
+                    line,
+                    "function parameters must be identifiers "
+                    "(optionally annotated as 'name : number|text|array|Record')",
+                )
+            names.append(name)
+        if len(set(names)) != len(names):
+            raise ParseError(line, "function parameter names must be unique")
+        return names, types
+
+    def _parse_return_type(self, raw_type: str | None, line: int) -> str | None:
+        if raw_type is None:
+            return None
+        type_name = raw_type.strip()
+        if not re.fullmatch(r"[A-Za-z_]\w*", type_name):
+            raise ParseError(line, f"invalid return type '{type_name}'")
+        return type_name
 
     def _parse_goto(self, target: str, line: int) -> dict[str, object]:
         if re.fullmatch(r"to\s*=\s*stop", target, re.I):

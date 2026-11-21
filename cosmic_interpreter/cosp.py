@@ -26,9 +26,14 @@ _MAX_ARCHIVE_MEMBERS = 10000
 _MAX_ARCHIVE_SIZE = 256 * 1024 * 1024
 _MAX_INDEX_SIZE = 4 * 1024 * 1024
 # 网关/限流类瞬时错误重试，避免代理抖动直接失败。
-_RETRY_ATTEMPTS = 3
+# 指数退避：0.5s、1s、2s、4s（共 5 次尝试），足够跨过常见的网关抖动窗口。
+_RETRY_ATTEMPTS = 5
 _RETRY_STATUS_CODES = frozenset({408, 425, 429, 500, 502, 503, 504})
 _RETRY_DELAY_SECONDS = 0.5
+
+
+def _retry_delay(attempt: int) -> float:
+    return _RETRY_DELAY_SECONDS * (2 ** attempt)
 # 默认远端来源：本项目仓库的索引 JSON 与源码归档。
 _DEFAULT_INDEX_URL = (
     "https://raw.githubusercontent.com/HUOHONG-1234/Cosmic-ASM/main/index.json"
@@ -140,7 +145,7 @@ def _parse_manifest(path: Path) -> dict[str, object]:
     except FileNotFoundError as error:
         raise CospError(
             f"cannot find {path.name} in {path.parent}; "
-            "run 'cosp new <name>' or 'cosp init' to create a project here"
+            "run 'cosmic new <name>' or 'cosmic init' to create a project here"
         ) from error
     except OSError as error:
         raise CospError(f"cannot read {path}: {error}") from error
@@ -366,12 +371,12 @@ def _download_https_archive(url: str, destination: Path) -> None:
             raise
         except urllib.error.HTTPError as error:
             if error.code in _RETRY_STATUS_CODES and attempt + 1 < _RETRY_ATTEMPTS:
-                time.sleep(_RETRY_DELAY_SECONDS * (attempt + 1))
+                time.sleep(_retry_delay(attempt))
                 continue
             raise CospError(f"cannot download remote dependency: {error}") from error
         except (OSError, urllib.error.URLError) as error:
             if attempt + 1 < _RETRY_ATTEMPTS:
-                time.sleep(_RETRY_DELAY_SECONDS * (attempt + 1))
+                time.sleep(_retry_delay(attempt))
                 continue
             raise CospError(f"cannot download remote dependency: {error}") from error
     if not zipfile.is_zipfile(destination):
@@ -406,12 +411,12 @@ def _fetch_https_document(url: str, *, limit: int, label: str) -> bytes:
             raise
         except urllib.error.HTTPError as error:
             if error.code in _RETRY_STATUS_CODES and attempt + 1 < _RETRY_ATTEMPTS:
-                time.sleep(_RETRY_DELAY_SECONDS * (attempt + 1))
+                time.sleep(_retry_delay(attempt))
                 continue
             raise CospError(f"cannot download {label}: {error}") from error
         except (OSError, urllib.error.URLError) as error:
             if attempt + 1 < _RETRY_ATTEMPTS:
-                time.sleep(_RETRY_DELAY_SECONDS * (attempt + 1))
+                time.sleep(_retry_delay(attempt))
                 continue
             raise CospError(f"cannot download {label}: {error}") from error
     raise CospError(f"cannot download {label}")
@@ -619,6 +624,43 @@ def _install(root: Path, manifest: dict[str, object], *, refresh: bool = False) 
             shutil.rmtree(backup)
 
 
+def _add_dependency(
+    root: Path,
+    manifest: dict[str, object],
+    dependencies: dict[str, object],
+    name: str,
+    path: str | None,
+    index_url: str | None,
+) -> None:
+    """把一个依赖写进清单并安装。``path`` 为 None 时按索引解析。"""
+    if not _NAME_RE.fullmatch(name):
+        raise CospError("invalid dependency name")
+    if path is None:
+        resolved = _resolve_registry_entry(name, index_url)
+        dependencies[name] = resolved
+        _install(root, manifest, refresh=True)
+        _write_manifest(root, manifest)
+        location = resolved.get("subdir") or resolved["url"]
+        print(f"Added {name} {resolved.get('version', '0.0.0')} from {location}")
+        return
+    remote = urlsplit(path)
+    if remote.scheme:
+        if remote.scheme.lower() != "https":
+            raise CospError("remote dependencies must use HTTPS")
+        dependencies[name] = path
+    else:
+        source = Path(path).resolve()
+        if not source.exists() or not (source.is_dir() or zipfile.is_zipfile(source)):
+            raise CospError("dependency must be an existing local directory or ZIP archive")
+        try:
+            location = os.path.relpath(source, root)
+        except ValueError as error:
+            raise CospError("dependency must be on the same filesystem volume") from error
+        dependencies[name] = Path(location).as_posix()
+    _install(root, manifest, refresh=True)
+    _write_manifest(root, manifest)
+
+
 def _render_template(name: str, target: Path, template: str | None) -> None:
     if template is None or template in _BUILTIN_TEMPLATES:
         files = _BUILTIN_TEMPLATES[template or "app"]
@@ -673,8 +715,8 @@ def _project_root() -> Path:
     return Path.cwd()
 
 
-def _main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="cosp", description="Cosmic Package Manager")
+def _main(argv: list[str] | None = None, prog: str = "cosp") -> int:
+    parser = argparse.ArgumentParser(prog=prog, description="Cosmic package manager")
     subparsers = parser.add_subparsers(dest="command", required=True)
     init_parser = subparsers.add_parser("init", help="initialize a project in the current directory")
     init_parser.add_argument("--name", default=Path.cwd().name)
@@ -705,7 +747,20 @@ def _main(argv: list[str] | None = None) -> int:
     )
     remove_parser = subparsers.add_parser("remove", help="remove a dependency")
     remove_parser.add_argument("name")
-    subparsers.add_parser("install", help="install dependencies and update cosp.lock")
+    install_parser = subparsers.add_parser(
+        "install",
+        help="install dependencies; with names, resolve them from the index first",
+    )
+    install_parser.add_argument(
+        "names",
+        nargs="*",
+        help="packages to add from the index before installing (optional)",
+    )
+    install_parser.add_argument(
+        "--index",
+        default=None,
+        help="package index JSON URL (default: COSMIC_COSP_INDEX or the Cosmic-ASM repository index)",
+    )
     build_parser = subparsers.add_parser("build", help="compile the project's entry file")
     build_parser.add_argument("-o", "--output", type=Path)
     run_parser = subparsers.add_parser("run", help="interpret the project's entry file")
@@ -752,32 +807,7 @@ def _main(argv: list[str] | None = None) -> int:
         if not isinstance(dependencies, dict):
             raise CospError("invalid project manifest dependencies")
         if args.command == "add":
-            if not _NAME_RE.fullmatch(args.name):
-                raise CospError("invalid dependency name")
-            if args.path is None:
-                resolved = _resolve_registry_entry(args.name, args.index)
-                dependencies[args.name] = resolved
-                _install(root, manifest, refresh=True)
-                _write_manifest(root, manifest)
-                location = resolved.get("subdir") or resolved["url"]
-                print(f"Added {args.name} {resolved.get('version', '0.0.0')} from {location}")
-                return 0
-            remote = urlsplit(args.path)
-            if remote.scheme:
-                if remote.scheme.lower() != "https":
-                    raise CospError("remote dependencies must use HTTPS")
-                dependencies[args.name] = args.path
-            else:
-                source = Path(args.path).resolve()
-                if not source.exists() or not (source.is_dir() or zipfile.is_zipfile(source)):
-                    raise CospError("dependency must be an existing local directory or ZIP archive")
-                try:
-                    location = os.path.relpath(source, root)
-                except ValueError as error:
-                    raise CospError("dependency must be on the same filesystem volume") from error
-                dependencies[args.name] = Path(location).as_posix()
-            _install(root, manifest, refresh=True)
-            _write_manifest(root, manifest)
+            _add_dependency(root, manifest, dependencies, args.name, args.path, args.index)
             return 0
         if args.command == "remove":
             if args.name not in dependencies:
@@ -788,6 +818,14 @@ def _main(argv: list[str] | None = None) -> int:
             shutil.rmtree(root / ".cosp" / "packages" / args.name, ignore_errors=True)
             return 0
         if args.command == "install":
+            if getattr(args, "names", None):
+                # `install <name>...` 等价于逐个 add：npm 手感，用户不必记两个命令。
+                for name in args.names:
+                    _add_dependency(
+                        root, manifest, dependencies, name, None,
+                        getattr(args, "index", None),
+                    )
+                return 0
             _install(root, manifest)
             print(f"Installed {len(dependencies)} package(s)")
             return 0
@@ -806,6 +844,8 @@ def _main(argv: list[str] | None = None) -> int:
 
             return interpreter_main([str(entry), *args.args])
         if args.command == "test":
+            if not (root / "tests").is_dir():
+                raise CospError("no 'tests' directory in this project")
             result = subprocess.run(
                 [sys.executable, "-m", "unittest", "discover", "-s", "tests", *args.args],
                 cwd=root,
@@ -813,13 +853,13 @@ def _main(argv: list[str] | None = None) -> int:
             )
             return result.returncode
     except (CospError, OSError, shutil.Error, zipfile.BadZipFile) as error:
-        print(f"cosp: {error}", file=sys.stderr)
+        print(f"{prog}: error: {error}", file=sys.stderr)
         return 1
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
-    return _main(argv)
+def main(argv: list[str] | None = None, prog: str = "cosp") -> int:
+    return _main(argv, prog=prog)
 
 
 if __name__ == "__main__":

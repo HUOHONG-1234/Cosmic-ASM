@@ -504,7 +504,7 @@ class CospTests(unittest.TestCase):
             root = Path(temporary)
             with self.assertRaisesRegex(
                 CospError,
-                r"cannot find cosp\.toml in .*run 'cosp new <name>' or 'cosp init'",
+                r"cannot find cosp\.toml in .*run 'cosmic new <name>' or 'cosmic init'",
             ):
                 _parse_manifest(root / "cosp.toml")
             buffer = io.StringIO()
@@ -512,6 +512,47 @@ class CospTests(unittest.TestCase):
                 "cosmic_interpreter.cosp._project_root", return_value=root
             ), redirect_stdout(buffer):
                 self.assertEqual(_main(["install"]), 1)
+
+    def test_install_with_package_name_adds_and_installs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "project"
+            project.mkdir()
+            _render_template("project", project, "app")
+            document = self._index_document(
+                {"mathx": {"version": "1.0.0", "subdir": "packages/mathx"}}
+            )
+            payload = json.dumps(document).encode("utf-8")
+
+            def fake_download(_url: str, destination: Path) -> None:
+                self._write_repository_archive(destination)
+
+            with patch(
+                "cosmic_interpreter.cosp._fetch_https_document", return_value=payload
+            ), patch(
+                "cosmic_interpreter.cosp._download_https_archive", side_effect=fake_download
+            ), patch(
+                "cosmic_interpreter.cosp._project_root", return_value=project
+            ), redirect_stdout(io.StringIO()):
+                # `cosmic install mathx` 的路径：install 收到包名时等价 add。
+                self.assertEqual(_main(["install", "mathx"]), 0)
+
+            dependencies = _parse_manifest(project / "cosp.toml")["dependencies"]
+            self.assertIn("mathx", dependencies)
+            self.assertTrue(
+                (project / ".cosp" / "packages" / "mathx" / "lib.cos").is_file()
+            )
+
+    def test_install_without_names_keeps_manifest_only_behaviour(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "project"
+            project.mkdir()
+            _render_template("project", project, "app")
+            buffer = io.StringIO()
+            with patch(
+                "cosmic_interpreter.cosp._project_root", return_value=project
+            ), redirect_stdout(buffer):
+                self.assertEqual(_main(["install"]), 0)
+            self.assertIn("Installed 0 package(s)", buffer.getvalue())
 
     def test_index_command_lists_packages(self) -> None:
         document = self._index_document(

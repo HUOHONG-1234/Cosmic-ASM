@@ -1,7 +1,6 @@
 # 报错排查手册
 
-> 全部按真实解析器输出整理。格式统一为 `line N: 消息`。
-> 完整版见 [D:\ASM\Cosmic ASM 解决方案.md](file:///D:/ASM/Cosmic%20ASM%20解决方案.md)（36 条）。
+> 全部按解析器输出整理。格式统一为 `line N: 消息`。
 
 ---
 
@@ -141,8 +140,6 @@ cdll = come (winmm) (playsounda) (0) (buf) (0)
 ```
 
 原因：`semi` 档用引用计数，函数一返回本地计数归零，缓冲区被释放，但声音还在放。
-
-详见 [v6 设计](./v6-gc-asm.md)。
 
 ---
 
@@ -608,5 +605,3 @@ cannot find -lmingw32
 | 32 位回绕 | `#%math = uint32` |
 
 ---
-
-*本文所有报错信息从 `parser.py` 的 61 条 `ParseError` 和 `runtime.py` 的 30 多条 `RuntimeError` 里提取，不是凭记忆写的。*

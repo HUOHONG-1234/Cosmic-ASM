@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from .c_backend import estimate_memory, generate_c
+from .diagnostics import format_message
 from .parser import ParseError, parse
 from . import hop
 from .source_loader import load_source
@@ -171,6 +172,9 @@ def compile_source(
             command.append(f"-l{library}")
     if "cosmic_atom_init" in generated and (os.name != "nt" or linux_target):
         command.append("-pthread")
+    if os.name == "nt" and not linux_target:
+        # Windows host 的 CSPRNG 走 BCryptGenRandom，需要链接 libbcrypt
+        command.append("-lbcrypt")
     try:
         completed = subprocess.run(
             command,
@@ -300,7 +304,16 @@ def main(argv: list[str] | None = None) -> int:
             lapack_library=args.lapack_library,
         )
     except CompileError as error:
-        print(error, file=sys.stderr)
+        message = str(error)
+        source_text = None
+        try:
+            source_text = load_source(args.source)
+        except (OSError, UnicodeError, ParseError):
+            source_text = None
+        print(
+            format_message(message, source_text=source_text, path=args.source),
+            file=sys.stderr,
+        )
         return 1
     print(f"Generated C: {c_path}")
     print(f"Executable: {output_path}")

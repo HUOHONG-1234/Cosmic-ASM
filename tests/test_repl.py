@@ -66,14 +66,14 @@ class PrintExecutionTests(unittest.TestCase):
         session, _ = make_session(type_text("x") + [Key("enter")], execute=boom)
 
         self.assertEqual(session.run(), 0)
-        self.assertTrue(any("错误:" in line for line in session.output_lines))
+        self.assertTrue(any("error:" in line for line in session.output_lines))
         self.assertTrue(any("解析崩了" in line for line in session.output_lines))
 
     def test_default_executor_reports_parse_error(self) -> None:
         session, _ = make_session(type_text("这 不是 语句") + [Key("enter")])
 
         self.assertEqual(session.run(), 0)
-        self.assertTrue(any("错误:" in line for line in session.output_lines))
+        self.assertTrue(any("error:" in line for line in session.output_lines))
 
 
 class LineEditingTests(unittest.TestCase):
@@ -204,13 +204,13 @@ class HelpPanelTests(unittest.TestCase):
         session.handle_key(Key("f1"))
         session.render()
         showing = last_frame(sink)
-        self.assertIn("快捷键", showing)
+        self.assertIn("Key bindings", showing)
         self.assertIn("Ctrl+Q", showing)
 
         session.handle_key(Key("escape"))
         session.render()
         hidden = last_frame(sink)
-        self.assertNotIn("快捷键", hidden)
+        self.assertNotIn("Key bindings", hidden)
         self.assertIn(PROMPT.rstrip(), hidden)
 
     def test_help_does_not_break_the_grid(self) -> None:

@@ -1,0 +1,71 @@
+#% v9 Delta 示例：文本函数 + 数组函数 + 记录一等值
+#%
+#% 三种「以前写不出来」的抽象，现在都能封装成函数：
+#%
+#%   python -m cosmic_interpreter cosine run examples/v9_delta.cos
+#%   python -m cosmic_interpreter cosine build examples/v9_delta.cos -o v9demo
+#%
+#% 解释器与编译版输出一致。
+
+#%include = "../lib/text.cos"
+
+record Money { amount, currency }
+
+#% 两条记录相加：记录作参数、作返回值
+function add_money(a : Money, b : Money) -> Money
+{
+    return Money(a.amount + b.amount, a.currency)
+}
+
+#% 钱包里所有记录的总额：数组作参数
+function wallet_total(values : array) = array_sum(values)
+
+#% 把「商品名:价格」的一行文本拆出价格：文本参数 + 数值返回
+function price_of(line : text) = to_number(field(line, ":", 2))
+
+#% 金额格式化：文本返回
+function currency_tag(code) -> text
+{
+    if (code == 840)
+    {
+        return "USD"
+    }
+    if (code == 978)
+    {
+        return "EUR"
+    }
+    return "???"
+}
+
+var LEDGER = {"coffee:12\ncake:8\nbook:30"}
+
+math_run price_of(line_at({LEDGER}, 1)) = ?
+if up = (ok) goto (push ({first} = {(in = up)}))
+print (<{"line 1 price = "} (and) {first}>)
+
+math_run price_of(line_at({LEDGER}, 3)) = ?
+if up = (ok) goto (push ({third} = {(in = up)}))
+print (<{"line 3 price = "} (and) {third}>)
+
+function demo()
+{
+    let a = Money(10, 840)
+    let b = Money(5, 840)
+    let total = add_money(a, b)
+    return total.amount
+}
+math_run demo() = ?
+if up = (ok) goto (push ({wallet} = {(in = up)}))
+print (<{"wallet total = "} (and) {wallet}>)
+
+math_run wallet_total([7, 11, 13]) = ?
+if up = (ok) goto (push ({sum} = {(in = up)}))
+print (<{"array total = "} (and) {sum}>)
+
+math_run currency_tag(978) = ?
+if up = (ok) goto (push ({tag} = {(in = up)}))
+print (<{"currency = "} (and) {tag}>)
+
+math_run text_upper(currency_tag(840)) = ?
+if up = (ok) goto (push ({upper_tag} = {(in = up)}))
+print (<{"shouting = "} (and) {upper_tag}>)

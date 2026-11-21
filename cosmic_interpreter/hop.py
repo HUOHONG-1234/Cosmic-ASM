@@ -29,7 +29,8 @@ _NUMERIC = "numeric"  # 结果为数值：同上，跟随程序 math mode
 _ARRAY = "array"      # 结果为数组：array 声明
 _STATEMENT = "statement"  # 只执行，不写回
 
-_TARGET_KEYWORD = "存"
+# 目标关键字：中文 `存` 与英文 `to` / `into` 等价。
+_TARGET_KEYWORDS = ("存", "to", "into")
 
 
 @dataclass(frozen=True)
@@ -88,6 +89,34 @@ _register(
     _Verb("正弦", 1, "sin", _NUMERIC),
     _Verb("余弦", 1, "cos", _NUMERIC),
     _Verb("对数", 2, "log", _NUMERIC),
+)
+
+# 英文动词（verb-object 风格），与中文动词完全等价，供非中文母语者使用。
+_register(
+    _Verb("open_file", 1, "read_text", _STRING),
+    _Verb("write_file", 2, "write_text", _STATEMENT),
+    _Verb("text_length", 1, "strlen", _NUMERIC),
+    _Verb("find_index", 2, "find", _NUMERIC),
+    _Verb("replace_text", 3, "replace", _STRING),
+    _Verb("trim_text", 1, "trim", _STRING),
+    _Verb("upper_text", 1, "upper", _STRING),
+    _Verb("lower_text", 1, "lower", _STRING),
+    _Verb("slice_bytes", 3, "substr_bytes", _STRING),
+    _Verb("count_lines", 1, "line_count", _NUMERIC),
+    _Verb("array_length", 1, "array_len", _NUMERIC, array_argument=True),
+    _Verb("array_total", 1, "array_sum", _NUMERIC, array_argument=True),
+    _Verb("array_mean", 1, "mean", _NUMERIC, array_argument=True),
+    _Verb("at_index", 2, "array_at", _NUMERIC, array_argument=True),
+    _Verb("push_item", 2, "array_push", _ARRAY, array_argument=True),
+    _Verb("fill_array", 2, "array_fill", _ARRAY),
+    _Verb("square_root", 1, "sqrt", _NUMERIC),
+    _Verb("absolute_value", 1, "abs", _NUMERIC),
+    _Verb("power_of", 2, "pow", _NUMERIC),
+    _Verb("floor_of", 1, "floor", _NUMERIC),
+    _Verb("ceil_of", 1, "ceil", _NUMERIC),
+    _Verb("sine_of", 1, "sin", _NUMERIC),
+    _Verb("cosine_of", 1, "cos", _NUMERIC),
+    _Verb("log_of", 2, "log", _NUMERIC),
 )
 
 
@@ -178,25 +207,32 @@ def _try_expand(line: int, tokens: list[str]) -> list[str] | None:
     rest = _strip_particles(tokens[1:])
     target: str | None = None
     if verb.needs_target:
-        if _TARGET_KEYWORD not in rest:
+        keyword_index = next(
+            (index for index, token in enumerate(rest) if token in _TARGET_KEYWORDS),
+            None,
+        )
+        if keyword_index is None:
             raise HopError(
                 line,
-                f"'{verb.name}' 需要 '{_TARGET_KEYWORD} 目标变量'，例如：{verb.name} … 存 结果",
+                f"'{verb.name}' needs a target: write "
+                f"'to <variable>' or '存 <variable>' "
+                f"(example: {verb.name} ... to result)",
             )
-        index = rest.index(_TARGET_KEYWORD)
-        arguments = rest[:index]
-        tail = rest[index + 1 :]
+        arguments = rest[:keyword_index]
+        tail = rest[keyword_index + 1 :]
         if len(tail) != 1:
-            raise HopError(line, f"'{verb.name}' 的 {_TARGET_KEYWORD} 后面必须正好跟一个变量名")
+            raise HopError(
+                line, f"'{verb.name}' must be followed by exactly one variable name"
+            )
         target = tail[0].strip("{}")
         if not target or not target.replace("_", "").isalnum():
-            raise HopError(line, f"'{verb.name}' 的目标变量名不合法：{tail[0]}")
+            raise HopError(line, f"'{verb.name}' target variable is not a valid name: {tail[0]}")
     else:
         arguments = rest
     if len(arguments) != verb.arity:
         raise HopError(
             line,
-            f"'{verb.name}' 需要 {verb.arity} 个参数，实际给了 {len(arguments)} 个",
+            f"'{verb.name}' expects {verb.arity} argument(s), got {len(arguments)}",
         )
     return _expand(verb, arguments, target)
 

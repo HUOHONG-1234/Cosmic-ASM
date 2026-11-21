@@ -5,6 +5,7 @@ import json
 import sys
 from pathlib import Path
 
+from .diagnostics import Diagnostic, render as render_diagnostic
 from .parser import ParseError, parse
 from .runtime import ExitRequest, Interpreter, RuntimeError
 from .source_loader import load_source
@@ -62,7 +63,14 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, UnicodeError, ParseError, RuntimeError) as error:
         line = getattr(error, "line", 1)
         message = hop.humanize(getattr(error, "message", str(error)))
-        diagnostics.append({"line": line, "message": message, "severity": "error"})
+        diagnostics.append(
+            {
+                "line": line,
+                "column": getattr(error, "column", None),
+                "message": message,
+                "severity": "error",
+            }
+        )
 
     # 附上出错的源码行，--check 时不必再去翻文件对行号。
     if source_text:
@@ -78,20 +86,43 @@ def main(argv: list[str] | None = None) -> int:
         else:
             for item in diagnostics:
                 print(
-                    f"line {item['line']}: {item['message']}",
+                    render_diagnostic(
+                        Diagnostic(
+                            message=str(item["message"]),
+                            line=int(item.get("line", 1) or 1),
+                            column=(
+                                int(item["column"])
+                                if item.get("column")
+                                else None
+                            ),
+                            path=str(args.source),
+                            source=(
+                                str(item["source"]) if item.get("source") else None
+                            ),
+                            severity=str(item.get("severity", "error")),
+                        )
+                    ),
                     file=sys.stderr,
                 )
-                if item.get("source"):
-                    print(f"  | {item['source']}", file=sys.stderr)
             if len(diagnostics) > 1:
-                print(f"{len(diagnostics)} 个问题", file=sys.stderr)
+                print(f"{len(diagnostics)} problem(s)", file=sys.stderr)
         return 1 if diagnostics else 0
 
     if diagnostics:
         first = diagnostics[0]
-        print(f"line {first['line']}: {first['message']}", file=sys.stderr)
-        if first.get("source"):
-            print(f"  | {first['source']}", file=sys.stderr)
+        print(
+            render_diagnostic(
+                Diagnostic(
+                    message=str(first["message"]),
+                    line=int(first.get("line", 1) or 1),
+                    column=int(first["column"]) if first.get("column") else None,
+                    path=str(args.source),
+                    source=str(first["source"]) if first.get("source") else None,
+                    severity=str(first.get("severity", "error")),
+                )
+            ),
+            file=sys.stderr,
+        )
         return 1
     return 0
 

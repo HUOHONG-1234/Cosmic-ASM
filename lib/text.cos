@@ -1,33 +1,149 @@
-#% lib/text.cos —— 文本库（码点判定）
+#% lib/text.cos —— 文本库
 #%
-#% 硬约束一：用户函数只能返回数值，不能返回字符串。
-#% 硬约束二（实测）：编译后端的字符串内置只接受字符串字面量或 var 文本变量，
-#%   不接受函数参数。所以「把文本作为参数传进函数」在编译版直接报错：
-#%     invalid expression: strlen expects a string literal, variable, or char_at result
-#%   因此本文件不再提供 text_len(t) 这类包装函数；文本查询请直接写内置调用：
+#% v9 起用户函数可以接收文本参数、返回文本，所以本文件同时提供：
+#%
+#%   1. 文本包装（text_len / text_upper / text_field ...）：参数和返回值可以是文本
+#%   2. 码点判定（char_is_digit / digit_value ...）：纯数值函数，
+#%      先用 ord({CH}) 取出码点再判断
+#%
+#% 文本变量的写法（顶层 var 需要花括号，字符串字面量直接写）：
 #%
 #%     var TEXT = {"Cosmic ASM"}
-#%     math_run strlen({TEXT}) = ? -int64          # 文本长度
-#%     math_run find({TEXT}, "ASM") = ? -int64     # 查找位置，字节下标
-#%     math_run line_count({TEXT}) = ? -int64      # 行数
-#%
-#% 硬约束三（实测）：编译后端的 ord 只接受字符串字面量、var 变量或 chr(...) 结果，
-#%   不接受 char_at(...)。要拿单个字符的码点，先把字符放进 var：
-#%
-#%     var CH = {"中"}
-#%     math_run ord({CH}) = ? -int64               # 20013
-#%
-#%   字符串结果（substr_bytes / trim / upper / lower / replace / read_text /
-#%   str_from_bytes）同样只能直接用在 math_run 表达式里，或 push 到文本变量。
-#%
-#% 本文件提供的是「码点 → 数值」的纯数值函数：先用 ord({CH}) 取出码点，
-#% 再交给这些函数判断。它们在解释器和编译版里行为一致：
+#%     math_run text_len({TEXT}) = ? -int64        # 文本长度
+#%     math_run text_has({TEXT}, "ASM") = ? -int64 # 是否包含
+#%     math_run text_field({"a,b,c"}, ",", 2) = ?  # 第 2 个字段
 #%
 #%     var CH = {"7"}
 #%     math_run char_is_digit(ord({CH})) = ? -int64  # 1
 #%
 #% 标识符限制：函数名首字符必须是 ASCII 字母或下划线（[A-Za-z_]\w*），
 #% 所以名字用英文；中文对照见 lib/README.md。
+
+#% ===== v9：真正的文本函数（文本参数 + 文本返回）=====
+#%
+#% v9 起用户函数可以接收文本参数、返回文本，所以下面这些包装终于可以写出来了：
+#%
+#%     math_run text_len(trim({T})) = ? -int64
+#%     math_run text_has({T}, "ASM") = ? -int64
+#%     math_run text_upper({T}) = ?                  # 直接打印文本结果
+#%
+#% 两个后端（解释器 / 编译版）行为一致。
+
+#% 文本长度，按 Unicode 码点计数
+function text_len(t : text) = strlen(t)
+
+#% 文本行数（与内置 line_count 一致）
+function text_lines(t : text) = line_count(t)
+
+#% 转大写
+function text_upper(t : text) -> text = upper(t)
+
+#% 转小写
+function text_lower(t : text) -> text = lower(t)
+
+#% 去掉首尾空白
+function text_trim(t : text) -> text = trim(t)
+
+#% 子串出现次数
+function text_count(t : text, word : text) = count_text(t, word)
+
+#% 是否包含子串：1 是，0 否
+function text_has(t : text, word : text) = contains_text(t, word)
+
+#% 是否以某段文本开头
+function text_starts(t : text, prefix : text) = starts_with(t, prefix)
+
+#% 是否以某段文本结尾
+function text_ends(t : text, suffix : text) = ends_with(t, suffix)
+
+#% 重复文本：text_repeat("ab", 3) = "ababab"
+function text_repeat(t : text, times) -> text = repeat_text(t, times)
+
+#% 按分隔符取第 index 个字段（从 1 开始，与内置 field 一致）
+function text_field(t : text, separator : text, index) -> text = field(t, separator, index)
+
+#% 按分隔符切成若干字段后的个数
+function text_fields(t : text, separator : text) = split_count(t, separator)
+
+#% ASCII 大写字母转小写，其余码点原样返回
+function char_to_lower(code)
+{
+    if (code >= 65)
+    {
+        if (code <= 90)
+        {
+            return code + 32
+        }
+    }
+    return code
+}
+
+#% ASCII 小写字母转大写，其余码点原样返回
+function char_to_upper(code)
+{
+    if (code >= 97)
+    {
+        if (code <= 122)
+        {
+            return code - 32
+        }
+    }
+    return code
+}
+
+#% 是否十六进制数字：0-9 / A-F / a-f
+function char_is_hex(code)
+{
+    if (code >= 48)
+    {
+        if (code <= 57)
+        {
+            return 1
+        }
+    }
+    if (code >= 65)
+    {
+        if (code <= 70)
+        {
+            return 1
+        }
+    }
+    if (code >= 97)
+    {
+        if (code <= 102)
+        {
+            return 1
+        }
+    }
+    return 0
+}
+
+#% 十六进制数字的数值：0-9 / A-F / a-f 返回 0..15，其余返回 -1
+function digit_value(code)
+{
+    if (code >= 48)
+    {
+        if (code <= 57)
+        {
+            return code - 48
+        }
+    }
+    if (code >= 65)
+    {
+        if (code <= 70)
+        {
+            return code - 55
+        }
+    }
+    if (code >= 97)
+    {
+        if (code <= 102)
+        {
+            return code - 87
+        }
+    }
+    return -1
+}
 
 #% 是否空白：制表 9、换行 10、回车 13、空格 32（与内置 trim 去掉的字符一致）
 function char_is_space(code)

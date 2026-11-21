@@ -1,0 +1,39 @@
+#% lib/data.cos —— CSV 数值统计（include 期绑定）
+#%
+#% 为什么不是普通函数：C 后端的字符串内置只接受字面量或 var 文本变量，
+#% 不接受函数参数，所以 csv_rows(text) 这种写法在编译版无法通过。
+#% 本文件改为「宏式」include：先把文本放进约定的变量，再 include，
+#% 由 include 顶层的 math_run 语句算出 csv_rows / csv_cols / csv_data_rows。
+#% 解释器与编译版输出一致。
+#%
+#% 约定变量（必须在 include 之前定义）：
+#%   CSV_TEXT  整段 CSV 文本
+#%   CSV_SEP   分隔符，例如 ","
+#%
+#% 用法：
+#%
+#%     push ({CSV_TEXT} = {"name,score\nann,10\nbob,30"})
+#%     push ({CSV_SEP} = {","})
+#%     #%include = "lib/data.cos"
+#%     print (<{csv_rows}>)        # 3
+#%     print (<{csv_cols}>)        # 2
+#%     print (<{csv_data_rows}>)   # 2（不含表头）
+#%
+#% 注意：include 会执行这些语句，所以同一文件只能 include 一次；
+#% 需要换一份 CSV 时，重新定义 CSV_TEXT 后再次 include 会重复定义变量。
+#% 更灵活的单次统计建议直接在脚本里写：
+#%
+#%     math_run line_count({CSV_TEXT}) = ? -int64
+#%     math_run split_count(line_at({CSV_TEXT}, 1), {CSV_SEP}) = ? -int64
+
+#% 总行数（含表头；line_count 不把结尾换行算成空行）
+math_run line_count({CSV_TEXT}) = ? -int64
+if up = (ok) goto (push ({csv_rows} = {(in = up)}))
+
+#% 列数：用第一行按分隔符切分
+math_run split_count(line_at({CSV_TEXT}, 1), {CSV_SEP}) = ? -int64
+if up = (ok) goto (push ({csv_cols} = {(in = up)}))
+
+#% 数据行数（总行数减 1，假设第一行是表头）
+math_run line_count({CSV_TEXT}) - 1 = ? -int64
+if up = (ok) goto (push ({csv_data_rows} = {(in = up)}))

@@ -78,7 +78,7 @@ class HopRewriteTests(unittest.TestCase):
             parse("行数 文本\n")
 
     def test_wrong_argument_count_is_a_parse_error(self):
-        with self.assertRaisesRegex(ParseError, "需要 1 个参数"):
+        with self.assertRaisesRegex(ParseError, "expects 1 argument"):
             parse("行数 文本 多余 存 结果\n")
 
     def test_unknown_verb_passes_through(self):
@@ -86,6 +86,19 @@ class HopRewriteTests(unittest.TestCase):
         rewritten, line_map = hop.rewrite(source)
         self.assertEqual(rewritten, source)
         self.assertIsNone(line_map)
+
+    def test_english_verbs_are_equivalent_to_chinese(self):
+        # 变量名用 ASCII，两边展开应逐字节相同（中文变量名会被映射成内部名）。
+        chinese = '行数 data 存 total\n替换文本 data "a" "b" 存 out\n'
+        english = 'count_lines data to total\nreplace_text data "a" "b" to out\n'
+        self.assertEqual(hop.rewrite(chinese)[0], hop.rewrite(english)[0])
+
+    def test_english_target_keywords_to_and_into(self):
+        for keyword in ("to", "into"):
+            with self.subTest(keyword=keyword):
+                rewritten, _ = hop.rewrite(f"count_lines text {keyword} lines\n")
+                self.assertIn("math_run line_count({", rewritten)
+                self.assertIn("if up = (ok) goto (push ({", rewritten)
 
 
 class HopExecutionTests(unittest.TestCase):
@@ -163,6 +176,28 @@ class HopExecutionTests(unittest.TestCase):
     def test_require_ok_is_a_noop_when_previous_step_succeeded(self):
         _interpreter, output = self.run_source('push ({a} = {"ok"})\nrequire_ok 1\nprint (<{a}>)\n')
         self.assertEqual(output.strip(), "ok")
+
+    def test_english_and_chinese_verbs_produce_same_output(self):
+        chinese = (
+            "#%math = int64\n"
+            'push ({文本} = {"a\\nb\\nc"})\n'
+            "行数 文本 存 总行\n"
+            "平方根 16 存 根\n"
+            "print (<{总行}>)\n"
+            "print (<{根}>)\n"
+        )
+        english = (
+            "#%math = int64\n"
+            'push ({文本} = {"a\\nb\\nc"})\n'
+            "count_lines 文本 to 总行\n"
+            "square_root 16 to 根\n"
+            "print (<{总行}>)\n"
+            "print (<{根}>)\n"
+        )
+        for source in (chinese, english):
+            output = io.StringIO()
+            Interpreter(output=output).run(parse(source))
+            self.assertEqual(output.getvalue().splitlines(), ["3", "4"])
 
 
 class HopBackendParityTests(unittest.TestCase):

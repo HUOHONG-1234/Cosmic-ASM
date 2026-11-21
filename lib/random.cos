@@ -1,0 +1,22 @@
+#% lib/random.cos —— 安全随机数的数值包装
+#%
+#% 随机源是内置 random_secure(low, high)，闭区间整数，来自操作系统 CSPRNG。
+#% 这些函数只返回数值；需要原始字节请直接调用 random_bytes(n)。
+#%
+#% 用法：
+#%
+#%     #%include = "lib/random.cos"
+#%     math_run secure_percent() = ? -int64     # 0..100
+#%     math_run secure_dice() = ? -int64        # 1..6
+
+#% 百分比：0..100（含两端）
+function secure_percent() = random_secure(0, 100)
+
+#% 布尔值：0 或 1
+function secure_bool() = random_secure(0, 1)
+
+#% 六面骰子：1..6（含两端）
+function secure_dice() = random_secure(1, 6)
+
+#% 指定闭区间内的随机整数
+function secure_between(low, high) = random_secure(low, high)

@@ -1,6 +1,6 @@
 """Cosmic ASM v8 的 TUI 层：纯 ANSI 渲染 + 平台按键适配。
 
-设计原则（见 docs/v8-plan.md 第三章"主线 B"）：
+设计原则：
 
 * **零外部依赖**。只用标准库：``sys`` ``os`` ``ctypes`` ``msvcrt`` ``termios``
   ``tty`` ``unicodedata`` ``shutil`` ``time``。

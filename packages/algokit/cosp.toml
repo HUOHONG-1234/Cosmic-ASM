@@ -1,0 +1,15 @@
+[package]
+name = "algokit"
+version = "1.0.0"
+entry = "lib.cos"
+
+[plugin]
+type = "library"
+
+[plugin.exposes]
+sorted_sum = "sorted_sum"
+reverse_sum = "reverse_sum"
+sorted_median = "sorted_median"
+contains = "contains"
+smallest = "smallest"
+largest = "largest"

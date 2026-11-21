@@ -1,0 +1,71 @@
+#% lib/algo.cos —— 排序与查找的纯数值包装
+#%
+#% 语言限制：数组不能作为用户函数参数（C 后端会报 unknown array 'a'），
+#% 函数体也不能读取调用方的数组。因此这里提供的是**固定三/四元素**版本：
+#% 调用者把元素作为独立数值参数传入，函数内部用数组字面量 + 内置
+#% sort_array / reverse_array / array_index_of 完成计算。
+#%
+#% 任意长度的数组统计请直接写内置调用：
+#%
+#%     array data = [3, 1, 2]
+#%     math_run array_sum(sort_array(data)) = ? -int64
+#%
+#% 用法：
+#%
+#%     #%include = "lib/algo.cos"
+#%     math_run sorted_total(3, 1, 2) = ? -int64       # 6
+#%     math_run sorted_median(3, 1, 2) = ? -int64      # 2
+#%     math_run has_value(3, 1, 2, 7) = ? -int64       # 0
+
+#% 排序后求和（升序或降序和相同，这里显式排序以演示内置用法）
+function sorted_total(a, b, c)
+{
+    let ordered = sort_array([c, a, b])
+    return array_sum(ordered)
+}
+
+#% 逆序后求和
+function reverse_total(a, b, c)
+{
+    let flipped = reverse_array([c, a, b])
+    return array_sum(flipped)
+}
+
+#% 三元素中位数：排序后取中间元素
+function sorted_median(a, b, c)
+{
+    let ordered = sort_array([c, a, b])
+    return array_at(ordered, 1)
+}
+
+#% 四元素中位数：排序后取中间两个的平均值（偶数个元素）
+function sorted_median4(a, b, c, d)
+{
+    let ordered = sort_array([d, b, a, c])
+    return (array_at(ordered, 1) + array_at(ordered, 2)) / 2
+}
+
+#% 三元素中是否包含指定值：返回 1 或 0
+function has_value(a, b, c, value)
+{
+    let index = array_index_of([c, a, b], value)
+    if (index < 0)
+    {
+        return 0
+    }
+    return 1
+}
+
+#% 三元素最小值
+function smallest3(a, b, c)
+{
+    let ordered = sort_array([c, a, b])
+    return array_at(ordered, 0)
+}
+
+#% 三元素最大值
+function largest3(a, b, c)
+{
+    let ordered = sort_array([c, a, b])
+    return array_at(ordered, 2)
+}

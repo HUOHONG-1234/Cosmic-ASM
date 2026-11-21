@@ -1914,6 +1914,40 @@ print (<{value}>)
         self.assertEqual(completed.returncode, 0)
         self.assertEqual(completed.stderr, b"")
 
+    def test_compiled_start_outside_chain_runs_synchronously(self) -> None:
+        # 文件里出现 atom 语句后，未被 proton 链调度的执行块仍要同步执行，
+        # 否则 start 之后的 dog 会看到 idle 并误报死锁（与解释器不一致）。
+        completed = self.compile_and_run(
+            "#execute\n"
+            "#math\n"
+            "#%math = int64\n"
+            "math_run 5 = ? -int64\n"
+            "if up = (ok) goto (push ({seed} = {(in = up)}))\n"
+            "call = (execute)\n"
+            "father = up\n"
+            "start(normal) = {doubler}\n"
+            "{\n"
+            "    math_run {seed} * 2 = ? -int64\n"
+            "    if up = (ok) goto (push ({seed} = {(in = up)}))\n"
+            '    print (<{"block seed="} (and) {seed}>)\n'
+            "}\n"
+            "dog(doubler) = (pass : ok) (error : error)\n"
+            "#atom\n"
+            "start(normal) = {worker}\n"
+            "{\n"
+            "    math_run 1 + 1 = ? -int32\n"
+            "}\n"
+            "proton {chain} = {worker}\n"
+            "nuclear_reactor {main} = {chain}\n"
+            "dog(worker) = (pass : ok) (error : error)\n"
+            'print (<{"outer seed="} (and) {seed}>)\n'
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(
+            completed.stdout.replace(b"\r\n", b"\n").split(b"\n")[:2],
+            [b"block seed=10", b"outer seed=5"],
+        )
+
     def test_compiled_atom_n_bomb_marks_block_stopped(self) -> None:
         completed = self.compile_and_run(
             "#atom\n"

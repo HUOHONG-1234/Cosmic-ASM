@@ -2,7 +2,7 @@
 
 > 我要说什么来着?
 
-[![Tests](https://img.shields.io/badge/tests-418%20passed%2C%201%20skipped-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-561%20passed%2C%201%20skipped-brightgreen)]()
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)]()
 [![GCC](https://img.shields.io/badge/backend-GCC%20%7C%20C11-orange)]()
 [![Dependencies](https://img.shields.io/badge/dependencies-none-success)]()
@@ -10,6 +10,36 @@
 Cosmic ASM（简称 COS）是一门自制的编程语言，带一个 Python 编写的**解释器**和一个把 `.cos` 翻译成 C 再用 GCC 编成本地程序的**编译器**。
 
 它的设计目标不是先进，是为初学者提供 C 的环境用于学习<br>我不会使用Git,所以我会让Agent代为上传.
+
+---
+
+## Quick start (English)
+
+The command line tool speaks English, so here is the short version for non-Chinese readers.
+The language itself keeps its Chinese verb-first syntax (see [README-syntax.md](./README-syntax.md)); English verbs are available as aliases.
+
+```bash
+# from a source checkout
+python -m cosmic_interpreter.cosmic_cli run examples/demo.cos
+python -m cosmic_interpreter.cosmic_cli build examples/demo.cos -o demo.exe
+
+# or, using the single-file build you made with PyInstaller
+cosmic run program.cos
+cosmic run --repl          # interactive REPL (F1 = help, Ctrl+Q = quit)
+cosmic build program.cos -o app.exe
+cosmic new demo            # scaffold a project
+cosmic install mathx       # add a package from the index and install it
+cosmic install             # install everything listed in cosp.toml
+cosmic index               # list packages in the remote index
+```
+
+Verb-first aliases work with `to` as the result keyword:
+
+```cos
+open_file "log.txt" to text
+count_lines text to lines
+replace_text text "ERROR" "error" to cleaned
+```
 
 ---
 
@@ -37,15 +67,16 @@ python -m cosmic_interpreter.cosmic_cli tui        # TUI REPL
 
 不需要装第三方库。
 
-### Windows MSI 安装
+### 打包成单个可执行文件
 
-安装 [CosmicAsm-0.1.0.msi](./dist/CosmicAsm-0.1.0.msi) 后即可使用单个 `cosmic` 命令。安装向导包含 **MIT 许可证页**与**自定义安装页**，可按需取消组件：
+仓库只放源码，不带预编译产物。想要一个 `cosmic` 命令，自己用 PyInstaller 打一个即可：
 
-| 组件 | 默认 | 说明 |
-| --- | --- | --- |
-| cosmic 命令行工具 | 必装 | `cosmic.exe`，一个可执行文件包含 run / build / pkg / index / tui；同时安装 `LICENSE.txt` |
-| 加入 PATH | 选中 | 写入系统 `PATH` 与 `COSMIC_HOME` |
-| 开始菜单快捷方式 | 选中 | 程序快捷方式与卸载入口 |
+```powershell
+python -m pip install pyinstaller
+pyinstaller --onefile --name cosmic packaging\cosmic_entry.py
+```
+
+产物在 `dist\cosmic.exe`，把它所在目录加进 `PATH` 就能直接用 `cosmic`。它内置了 Python 运行时，不需要系统装 Python；原生编译仍然需要单独装 GCC。
 
 ```powershell
 cosmic run program.cos
@@ -55,11 +86,21 @@ cosmic index
 cosmic tui
 ```
 
-v8 起只发布 `cosmic.exe`（三个旧入口各带一份 Python 运行时，合计约 25.8 MB；合并后单文件约 9 MB）。升级到 v8 前构建的三个旧 exe 会被 `packaging\build.ps1` 备份到 `D:\ASM\backup-exes-<时间戳>\`，旧脚本仍可通过 `python -m cosmic_interpreter.cli` 等方式调用。
+`cosmic` 顶层直接可用包管理器命令（`pkg` 命名空间保留为兼容写法）：
 
-取消「加入 PATH」时，需要手动用完整路径调用，或自行配置 `PATH`/`COSMIC_HOME`。卸载 MSI 会移除其注册的环境变量值。命令行静默安装/定制可用标准 MSI 属性，例如 `msiexec /i CosmicAsm-0.1.0.msi /qn ADDLOCAL=Tool,Environment`。
+| 命令 | 作用 |
+|---|---|
+| `cosmic new <名称>` / `cosmic init` | 脚手架 / 在当前目录初始化 |
+| `cosmic add <名称> [路径或 URL]` | 加依赖（索引 / 本地路径 / HTTPS ZIP） |
+| `cosmic remove <名称>` | 删依赖 |
+| `cosmic install` | 按 `cosp.toml` 安装全部并校验 `cosp.lock` |
+| `cosmic install <名称>…` | **按索引解析并安装指定包**（等价 `add` 后再安装） |
+| `cosmic index` | 列出远端索引里的包 |
+| `cosmic test` | 跑项目 Python 测试 |
+| `cosmic build` | 不带文件参数时按项目清单编译 `entry` |
+| `cosmic pkg <子命令>` | 旧命名空间，行为相同 |
 
-MSI 中的工具不依赖系统 Python。原生编译仍需单独安装 GCC，并确保 `gcc` 可从 `PATH` 找到；当前 MSI 不捆绑 GCC。安装包本身以 MIT 许可发布，版权与源码地址写在程序「应用和功能」条目的说明里。
+没打包也能用，直接把 `python -m cosmic_interpreter.cosmic_cli` 当作 `cosmic` 的同义词即可。
 
 ---
 
@@ -115,7 +156,7 @@ clang minimal.c -lm -o minimal
 python -m unittest discover -s tests -v
 ```
 
-最近完整测试运行：**418 passed, 1 skipped, 80 subtests**。
+最近完整测试运行：**462 passed, 1 skipped, 96 subtests**。
 
 解释器和编译器各有一套，**同一个程序两边输出必须一致**——这是项目里最硬的一条规矩。
 
@@ -132,6 +173,7 @@ python -m unittest discover -s tests -v
 | 字节串有限 | `bytes` 类型有长度上限，不适合超大二进制 |
 | 无符号计算 | 没有表达式树，做不了符号求导/积分 |
 | 无任意精度浮点 | bigint 只有整数 |
+| 递归深度两后端不同 | 解释器走显式栈，上限 4096 层；编译版每帧占真实线程栈，多语句函数体 1024 层，单表达式 / bigint / 嵌套函数 256 层。同一段深递归解释器能跑、编译版可能先撞墙，属资源模型差异，按特性处理 |
 | 内存卫生不等于安全加固 | 只有 GCC 编译版的 `kill {name} -force` 会覆盖该变量当前持有的存储；解释器不保证清零，副本、临时值、寄存器、转储和侧信道均不在保证范围内 |
 | 并发是模拟 | 串行执行，不提供并行加速 |
 | `print` 不认数组 | 数组要用 `array_at` 逐个取 |
@@ -145,8 +187,6 @@ python -m unittest discover -s tests -v
 | **稳定** | 承诺跨版本兼容 | 基本语法、`math_run`、数组、矩阵、位运算、并发组件、DLL 组件、`#gc = semi` |
 | **实验性** | 可能在任意版本改变或移除 | `#asm` 内联汇编、`#gc = mark`、`gc_pin` 嵌套语义 |
 | **不承诺** | 明确不提供保证 | 密码学安全与恒定时间、汇编块的优化器行为、并发并行性 |
-
-详见 [v6 设计](./docs/v6-gc-asm.md)。
 
 ### 高精度定点常数
 
@@ -196,11 +236,6 @@ cosp run
 
 - [完整语法参考](./README-syntax.md)
 - [错误排查手册](./docs/TROUBLESHOOTING.md)
-- [v4 设计：并发与 DLL](./docs/v4-concurrency.md)
-- [v5 设计：位运算、字节、矩阵](./docs/v5-numerics.md)
-- [v6 设计：内存回收、内联汇编与支持等级](./docs/v6-gc-asm.md)
-- [v7 计划：可组合性](./docs/v7-plan.md)
-- [v8 计划：OverDrive](./docs/v8-plan.md)
 - [cosp：脚手架、包管理和泛型函数](./docs/cosp.md)
 
 ---
